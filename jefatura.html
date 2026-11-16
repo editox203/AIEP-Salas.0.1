@@ -2,55 +2,155 @@
 <html lang="es">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Jefatura | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
+  <title>Administración | Salas AIEP</title><link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
-  <header class="topbar"><div class="brand">AIEP · ATENCIÓN</div><span class="role">Vista Jefatura</span><span class="connection" id="conexion">Conectando…</span></header>
+  <header class="topbar">
+    <div class="brand">AIEP · ADMINISTRACIÓN</div>
+    <span class="role">Vista Administración</span>
+    <span class="connection" id="conexion">Conectando…</span>
+    <button class="button secondary" id="btn-salir" style="padding:6px 12px;">Salir</button>
+  </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Casos escalados</div><h1>Revisión de Jefatura</h1><p>Resuelve las solicitudes derivadas por Coordinación. La decisión se refleja en vivo para el docente.</p></div>
+    <div class="heading"><div class="eyebrow">Panel Central</div><h1>Administración y Reportes</h1><p>Resuelve reasignaciones, crea usuarios, audita logs y consulta reportes con IA.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
-    <section><h2 class="section-title">Tickets derivados</h2><div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div></section>
+
+    <section>
+      <h2 class="section-title">Tickets derivados por Coordinación</h2>
+      <div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div>
+    </section>
+
+    <section class="panel" style="margin-top:27px;">
+      <h2>Crear Usuario (Exclusivo Administración)</h2>
+      <form id="form-usuario">
+        <div class="field"><label>Nombre Completo</label><input id="u-nombre" required></div>
+        <div class="field"><label>RUT</label><input id="u-rut" placeholder="12345678-9" required></div>
+        <div class="field"><label>Cargo</label><input id="u-cargo" placeholder="Ej: Docente Informática" required></div>
+        <div class="field"><label>Rol del Sistema</label>
+          <select id="u-rol" required>
+            <option value="user">Docente (user)</option>
+            <option value="admin">Coordinación (admin)</option>
+            <option value="superadmin">Administración (superadmin)</option>
+          </select>
+        </div>
+        <div class="field"><label>Escuela</label><input id="u-escuela" placeholder="Ej: Escuela de TIC" required></div>
+        <div class="field"><label>Contraseña Inicial</label><input id="u-pass" type="password" required></div>
+        <button class="button" type="submit">Registrar Usuario</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Asistente IA · Reportes Estadísticos</h2>
+      <div class="field">
+        <label>Solicita un reporte escrito (sala más usada, menos usada, actividad)</label>
+        <textarea id="ia-prompt" placeholder="Ej: Genera un informe escrito indicando qué sala se usó más, cuál menos y un resumen de los movimientos recientes."></textarea>
+      </div>
+      <button class="button" id="btn-ia" type="button">Generar Reporte Escrito</button>
+      <div id="ia-respuesta" class="notice" style="margin-top:14px;background:#f8fafc;color:#172033;border-color:#d9deea;white-space:pre-wrap;" hidden></div>
+    </section>
+
+    <section class="panel">
+      <h2>Logs de Auditoría (Aprobaciones, Rechazos, Chats y Usuarios)</h2>
+      <div id="lista-logs" style="max-height:260px;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.6;"></div>
+    </section>
   </main>
+
   <script type="module">
-    import { obtenerTickets, cambiarEstadoTicket } from './js/supabase-ajax.js';
+    import { verificarAcceso, cerrarSesion, obtenerSalasPorBloque, obtenerTickets, resolverTicketAdmin, crearUsuarioAdmin, obtenerLogs, obtenerEstadisticas, generarReporteIA } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
-    const bandeja = document.querySelector('#bandeja-jefatura');
-    const aviso = document.querySelector('#aviso');
+
+    const sesion = verificarAcceso('superadmin');
+    document.querySelector('#btn-salir').onclick = cerrarSesion;
+    const hoy = new Date().toISOString().split('T')[0];
     const conexion = document.querySelector('#conexion');
-    const tickets = new Map();
-    const estadosVisibles = new Set(['escalated', 'accepted', 'rejected']);
-    const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const etiquetas = { escalated: 'Pendiente de decisión', accepted: 'Aceptado', rejected: 'Rechazado' };
+    const aviso = document.querySelector('#aviso');
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
     function avisoTexto(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
-    function tarjeta(t) {
-      return `<article class="ticket" id="jef-${esc(t.id)}"><div class="ticket-top"><div><h3>Expediente #${esc(t.id)} · ${esc(t.room_code)}</h3><p><strong>${esc(t.category)}</strong> — ${esc(t.description)}</p><p class="muted">Docente: ${esc(t.teacher_name)} · RUT: ${esc(t.teacher_rut)}</p><p class="muted">${t.created_at ? new Date(t.created_at).toLocaleString('es-CL') : ''}</p></div><span class="badge ${esc(t.status)}">${esc(etiquetas[t.status] || t.status)}</span></div><p><strong>Nota de Coordinación:</strong> ${esc(t.escalation_notes || 'Sin notas')}</p>${t.status === 'escalated' ? `<div class="button-row"><button class="button" data-resolver="accepted" data-id="${esc(t.id)}">Aceptar</button><button class="button danger" data-resolver="rejected" data-id="${esc(t.id)}">Rechazar</button></div>` : ''}</article>`;
+
+    async function cargarTodo() {
+      const [salas, tickets, logs] = await Promise.all([
+        obtenerSalasPorBloque(hoy, null),
+        obtenerTickets(),
+        obtenerLogs()
+      ]);
+
+      const opcionesSalas = salas.map(s => `<option value="${s.sala_id}">Sala ${esc(s.numero_sala)} (${esc(s.categoria)})</option>`).join('');
+      const visibles = tickets.filter(t => ['pendiente_administracion', 'aprobado', 'rechazado'].includes(t.estado));
+
+      document.querySelector('#bandeja-jefatura').innerHTML = visibles.map(t => `
+        <article class="ticket">
+          <div class="ticket-top">
+            <div>
+              <h3>Expediente #${t.id} · Docente: ${esc(t.docente?.nombre)}</h3>
+              <p><strong>${esc(t.bloque)}</strong> — Solicita Sala: <strong>${esc(t.sala_preferida?.numero_sala)}</strong></p>
+              <p class="muted">Motivo: ${esc(t.motivo)}</p>
+            </div>
+            <span class="badge ${t.estado === 'aprobado' ? 'accepted' : (t.estado === 'rechazado' ? 'rejected' : 'escalated')}">${t.estado.toUpperCase()}</span>
+          </div>
+          ${t.estado === 'pendiente_administracion' ? `
+            <div class="field"><label>Reasignar Sala Final</label><select id="sala-final-${t.id}">${opcionesSalas}</select></div>
+            <div class="field"><label>Motivo o mensaje para el Docente</label><input id="msg-admin-${t.id}" placeholder="Ej: Aprobado, se asigna sala disponible."></div>
+            <div class="button-row">
+              <button class="button" data-accion="aprobado" data-id="${t.id}">Aprobar y Reasignar</button>
+              <button class="button danger" data-accion="rechazado" data-id="${t.id}">Rechazar</button>
+            </div>
+          ` : `<p><strong>Resolución:</strong> Sala Final ${esc(t.sala_final?.numero_sala || 'N/A')} — ${esc(t.mensaje_admin)}</p>`}
+        </article>
+      `).join('') || '<div class="empty">No hay tickets derivados por Coordinación.</div>';
+
+      document.querySelector('#lista-logs').innerHTML = logs.map(l =>
+        `<div style="border-bottom:1px solid #eee;padding:4px 0;">[${new Date(l.fecha_hora).toLocaleString('es-CL')}] <strong>${esc(l.usuarios?.nombre)}</strong> (${esc(l.usuarios?.rol)}) → <b>${esc(l.accion)}</b>: ${esc(l.detalles)}</div>`
+      ).join('') || 'Sin registros aún.';
     }
-    function dibujar() {
-      bandeja.innerHTML = [...tickets.values()].filter(t => estadosVisibles.has(t.status)).sort((a,b) => new Date(b.created_at) - new Date(a.created_at)).map(tarjeta).join('') || '<div class="empty">Todavía no hay tickets derivados.</div>';
-    }
-    function guardar(t) { if (estadosVisibles.has(t.status)) tickets.set(String(t.id), t); else tickets.delete(String(t.id)); dibujar(); }
-    bandeja.addEventListener('click', async e => {
-      const boton = e.target.closest('[data-resolver]'); if (!boton) return;
-      const decision = boton.dataset.resolver;
-      if (!window.confirm(`¿Confirmas ${decision === 'accepted' ? 'aceptar' : 'rechazar'} este ticket?`)) return;
-      bandeja.querySelectorAll(`[data-id="${CSS.escape(boton.dataset.id)}"]`).forEach(b => b.disabled = true);
-      try {
-        await cambiarEstadoTicket(boton.dataset.id, decision);
-        avisoTexto(`Ticket ${decision === 'accepted' ? 'aceptado' : 'rechazado'}.`, 'success');
-      } catch (error) { avisoTexto(error.message || 'No se pudo guardar la decisión.', 'error'); dibujar(); }
+
+    document.querySelector('#bandeja-jefatura').addEventListener('click', async e => {
+      const btn = e.target.closest('[data-accion]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const accion = btn.dataset.accion;
+      const salaFinal = document.querySelector(`#sala-final-${id}`).value;
+      const msg = document.querySelector(`#msg-admin-${id}`).value.trim() || (accion === 'aprobado' ? 'Solicitud aprobada.' : 'Solicitud rechazada.');
+      btn.disabled = true;
+      await resolverTicketAdmin(id, sesion.id, salaFinal, msg, accion);
+      avisoTexto(`Ticket #${id} marcado como ${accion}.`, 'success');
+      await cargarTodo();
     });
-    try {
-      escucharTiempoReal({
-        alCrearTicket: guardar,
-        alActualizarTicket: guardar,
-        alEstadoConexion: estado => {
-          conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
-          conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : (estado === 'CHANNEL_ERROR' || estado === 'TIMED_OUT' ? 'offline' : '')}`;
-        }
-      });
-      (await obtenerTickets()).forEach(guardar);
-      dibujar();
-    } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los casos. Configura Supabase y vuelve a cargar.</div>'; avisoTexto(error.message, 'error'); }
+
+    document.querySelector('#form-usuario').addEventListener('submit', async e => {
+      e.preventDefault();
+      await crearUsuarioAdmin({
+        nombre: document.querySelector('#u-nombre').value.trim(),
+        rut: document.querySelector('#u-rut').value.trim(),
+        cargo: document.querySelector('#u-cargo').value.trim(),
+        rol: document.querySelector('#u-rol').value,
+        escuela: document.querySelector('#u-escuela').value.trim(),
+        password: document.querySelector('#u-pass').value
+      }, sesion.id);
+      e.target.reset();
+      avisoTexto('Usuario creado correctamente.', 'success');
+      await cargarTodo();
+    });
+
+    document.querySelector('#btn-ia').onclick = async () => {
+      const respBox = document.querySelector('#ia-respuesta');
+      respBox.hidden = false;
+      respBox.textContent = 'Analizando estadísticas y generando reporte escrito…';
+      const [stats, logs] = await Promise.all([obtenerEstadisticas(), obtenerLogs()]);
+      respBox.textContent = await generarReporteIA(document.querySelector('#ia-prompt').value, stats, logs);
+    };
+
+    escucharTiempoReal({
+      alCrearTicket: cargarTodo,
+      alActualizarTicket: cargarTodo,
+      alNuevoLog: cargarTodo,
+      alEstadoConexion: estado => {
+        conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
+        conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : 'offline'}`;
+      }
+    });
+
+    await cargarTodo();
   </script>
 </body>
 </html>

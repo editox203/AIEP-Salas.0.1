@@ -2,51 +2,143 @@
 <html lang="es">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Coordinación | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
+  <title>Coordinación | Salas AIEP</title><link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
-  <header class="topbar"><div class="brand">AIEP · ATENCIÓN</div><span class="role">Vista Coordinación</span><span class="connection" id="conexion">Conectando…</span></header>
+  <header class="topbar">
+    <div class="brand">AIEP · ATENCIÓN</div>
+    <span class="role">Vista Coordinación</span>
+    <span class="connection" id="conexion">Conectando…</span>
+    <button class="button secondary" id="btn-salir" style="padding:6px 12px;">Salir</button>
+  </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Bandeja de entrada</div><h1>Solicitudes de sala</h1><p>Revisa los tickets y deriva a Jefatura los casos que requieran resolución.</p></div>
+    <div class="heading"><div class="eyebrow">Bandeja de entrada</div><h1>Solicitudes y Salas</h1><p>Revisa los tickets de docentes, abre chat privado o envíalos a Administración.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
-    <section><h2 class="section-title">Todos los tickets</h2><div id="bandeja-coordinacion" class="tickets"><div class="empty">Cargando tickets…</div></div></section>
+
+    <section class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h2 style="margin:0;">Disponibilidad de Salas</h2>
+        <div class="field" style="margin:0;">
+          <select id="filtro-bloque">
+            <option value="08:30:00">Bloque 1 (08:30 - 10:00)</option>
+            <option value="10:15:00">Bloque 2 (10:15 - 11:45)</option>
+            <option value="12:00:00">Bloque 3 (12:00 - 13:30)</option>
+            <option value="14:00:00">Bloque 4 (14:00 - 15:30)</option>
+          </select>
+        </div>
+      </div>
+      <div id="grid-salas" class="salas-grid"></div>
+    </section>
+
+    <section id="panel-chat" class="panel" hidden>
+      <h2>Chat Privado con Docente · Ticket #<span id="chat-id"></span></h2>
+      <div id="chat-mensajes" style="max-height:190px;overflow-y:auto;margin-bottom:12px;padding:10px;background:#f8fafc;border:1px solid #e4e8f0;border-radius:9px;"></div>
+      <div class="field" style="display:flex;gap:8px;">
+        <input id="chat-input" placeholder="Escribe un mensaje privado al docente…">
+        <button class="button" id="chat-enviar" type="button">Enviar</button>
+      </div>
+    </section>
+
+    <section><h2 class="section-title">Tickets (Recibidos y Aprobados)</h2><div id="bandeja-coordinacion" class="tickets"><div class="empty">Cargando tickets…</div></div></section>
   </main>
+
   <script type="module">
-    import { obtenerTickets, cambiarEstadoTicket } from './js/supabase-ajax.js';
+    import { verificarAcceso, cerrarSesion, obtenerSalasPorBloque, obtenerTickets, derivarTicket, obtenerMensajesChat, enviarMensajeChat } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
-    const bandeja = document.querySelector('#bandeja-coordinacion');
-    const aviso = document.querySelector('#aviso');
+
+    const sesion = verificarAcceso('admin');
+    document.querySelector('#btn-salir').onclick = cerrarSesion;
+    const hoy = new Date().toISOString().split('T')[0];
+    const filtroBloque = document.querySelector('#filtro-bloque');
     const conexion = document.querySelector('#conexion');
-    const tickets = new Map();
-    const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const etiquetas = { open: 'Abierto', escalated: 'Derivado a Jefatura', accepted: 'Aceptado', rejected: 'Rechazado' };
+    const aviso = document.querySelector('#aviso');
+    let chatTicketActual = null;
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
     function avisoTexto(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
-    function tarjeta(t) {
-      return `<article class="ticket" id="coord-${esc(t.id)}"><div class="ticket-top"><div><h3>Ticket #${esc(t.id)} · ${esc(t.room_code)}</h3><p><strong>${esc(t.category)}</strong> — ${esc(t.description)}</p><p class="muted">Docente: ${esc(t.teacher_name)} · RUT: ${esc(t.teacher_rut)}</p><p class="muted">${t.created_at ? new Date(t.created_at).toLocaleString('es-CL') : ''}</p></div><span class="badge ${esc(t.status)}">${esc(etiquetas[t.status] || t.status)}</span></div>${t.escalation_notes ? `<p><strong>Nota de Coordinación:</strong> ${esc(t.escalation_notes)}</p>` : ''}${t.status === 'open' ? `<div class="button-row"><button class="button" data-derivar="${esc(t.id)}">Derivar a Jefatura</button></div>` : ''}</article>`;
+
+    async function cargarSalas() {
+      const salas = await obtenerSalasPorBloque(hoy, filtroBloque.value);
+      document.querySelector('#grid-salas').innerHTML = salas.map(s => `
+        <article class="ticket">
+          <div class="ticket-top">
+            <div><h3>Sala ${esc(s.numero_sala)}</h3><p class="muted">${esc(s.categoria)}</p><p>Docente: <strong>${esc(s.docente_nombre) || '—'}</strong></p></div>
+            <span class="badge ${s.ocupada ? 'rejected' : 'accepted'}">${s.ocupada ? 'Ocupada' : 'Disponible'}</span>
+          </div>
+        </article>
+      `).join('');
     }
-    function dibujar() {
-      bandeja.innerHTML = [...tickets.values()].sort((a,b) => new Date(b.created_at) - new Date(a.created_at)).map(tarjeta).join('') || '<div class="empty">No hay tickets por mostrar.</div>';
+
+    async function cargarBandeja() {
+      const todos = await obtenerTickets();
+      const visibles = todos.filter(t => t.estado === 'pendiente_coordinacion' || t.estado === 'aprobado');
+      document.querySelector('#bandeja-coordinacion').innerHTML = visibles.map(t => `
+        <article class="ticket">
+          <div class="ticket-top">
+            <div>
+              <h3>Ticket #${t.id} · Solicita Sala ${esc(t.sala_preferida?.numero_sala)}</h3>
+              <p><strong>${esc(t.bloque)}</strong> — ${esc(t.motivo)}</p>
+              <p class="muted">Docente: ${esc(t.docente?.nombre)} · Sala Actual: ${esc(t.sala_actual?.numero_sala || 'Ninguna')}</p>
+              ${t.estado === 'aprobado' ? `<p style="color:var(--green);"><strong>Aprobado · Sala Final: ${esc(t.sala_final?.numero_sala)}</strong> (${esc(t.mensaje_admin)})</p>` : ''}
+            </div>
+            <span class="badge ${t.estado === 'aprobado' ? 'accepted' : 'open'}">${t.estado === 'aprobado' ? 'Aprobado' : 'Recibido'}</span>
+          </div>
+          ${t.estado === 'pendiente_coordinacion' ? `
+            <div class="button-row">
+              <button class="button" data-derivar="${t.id}">Enviar a Administración</button>
+              <button class="button secondary" data-chat="${t.id}">Chat Privado con Docente</button>
+            </div>
+          ` : ''}
+        </article>
+      `).join('') || '<div class="empty">No hay tickets por mostrar.</div>';
     }
-    function guardar(t) { tickets.set(String(t.id), t); dibujar(); }
-    bandeja.addEventListener('click', async e => {
-      const boton = e.target.closest('[data-derivar]'); if (!boton) return;
-      const nota = window.prompt('Nota para Jefatura (opcional):'); if (nota === null) return;
-      boton.disabled = true;
-      try { await cambiarEstadoTicket(boton.dataset.derivar, 'escalated', nota.trim()); avisoTexto('Ticket derivado a Jefatura.', 'success'); }
-      catch (error) { avisoTexto(error.message || 'No se pudo derivar el ticket.', 'error'); boton.disabled = false; }
+
+    async function refrescarChat() {
+      if (!chatTicketActual) return;
+      const msgs = await obtenerMensajesChat(chatTicketActual);
+      document.querySelector('#chat-mensajes').innerHTML = msgs.map(m => `<p style="margin:4px 0;"><strong>${esc(m.emisor?.nombre)}:</strong> ${esc(m.mensaje)}</p>`).join('') || '<p class="muted">Sin mensajes aún.</p>';
+    }
+
+    document.querySelector('#bandeja-coordinacion').addEventListener('click', async e => {
+      const btnDerivar = e.target.closest('[data-derivar]');
+      if (btnDerivar) {
+        btnDerivar.disabled = true;
+        await derivarTicket(btnDerivar.dataset.derivar, sesion.id);
+        avisoTexto('Ticket enviado a Administración.', 'success');
+        await cargarBandeja();
+      }
+      const btnChat = e.target.closest('[data-chat]');
+      if (btnChat) {
+        chatTicketActual = btnChat.dataset.chat;
+        document.querySelector('#chat-id').textContent = chatTicketActual;
+        document.querySelector('#panel-chat').hidden = false;
+        await refrescarChat();
+      }
     });
-    try {
-      escucharTiempoReal({
-        alCrearTicket: guardar,
-        alActualizarTicket: guardar,
-        alEstadoConexion: estado => {
-          conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
-          conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : (estado === 'CHANNEL_ERROR' || estado === 'TIMED_OUT' ? 'offline' : '')}`;
-        }
-      });
-      (await obtenerTickets()).forEach(guardar);
-      if (!tickets.size) dibujar();
-    } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los tickets. Configura Supabase y vuelve a cargar.</div>'; avisoTexto(error.message, 'error'); }
+
+    document.querySelector('#chat-enviar').onclick = async () => {
+      const input = document.querySelector('#chat-input');
+      if (!input.value.trim()) return;
+      await enviarMensajeChat(chatTicketActual, sesion.id, input.value.trim());
+      input.value = '';
+      await refrescarChat();
+    };
+
+    filtroBloque.onchange = cargarSalas;
+
+    escucharTiempoReal({
+      alCrearTicket: cargarBandeja,
+      alActualizarTicket: cargarBandeja,
+      alCambiarSalas: cargarSalas,
+      alNuevoMensajeChat: refrescarChat,
+      alEstadoConexion: estado => {
+        conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
+        conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : 'offline'}`;
+      }
+    });
+
+    await cargarSalas();
+    await cargarBandeja();
   </script>
 </body>
 </html>
