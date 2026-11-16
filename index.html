@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Demo AIEP | Tickets en vivo</title><link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+  <header class="topbar"><div class="brand">AIEP · DEMO EN VIVO</div><span class="role">Prototipo Supabase</span></header>
+  <main class="wrap launch">
+    <div class="eyebrow">Flujo de atención</div><h1>Gestión de solicitudes</h1>
+    <p class="small">Abre las tres vistas para probar el recorrido completo del ticket.</p>
+    <section class="panel">
+      <h2>Demostración en tiempo real</h2>
+      <p class="small">El docente crea una solicitud, Coordinación la deriva y Jefatura acepta o rechaza. Para que se comuniquen, configura Supabase y sirve esta carpeta mediante HTTP.</p>
+      <div id="mensaje" class="notice" hidden></div>
+      <button class="button" id="abrir-todas" type="button">Abrir las 3 pantallas</button>
+      <p class="footer-note">Si el navegador bloquea alguna ventana, permite las ventanas emergentes para este sitio o abre manualmente docente.html, coordinacion.html y jefatura.html.</p>
+    </section>
+  </main>
+  <script>
+    document.querySelector('#abrir-todas').addEventListener('click', () => {
+      const urls = ['docente.html', 'coordinacion.html', 'jefatura.html'];
+      const ventanas = urls.map((url, i) => window.open(url, `aiep-${i + 1}`, 'width=470,height=850,resizable=yes,scrollbars=yes'));
+      const bloqueadas = ventanas.some(v => !v);
+      const mensaje = document.querySelector('#mensaje');
+      if (bloqueadas) {
+        mensaje.hidden = false;
+        mensaje.textContent = 'El navegador bloqueó una o más ventanas. Autoriza las ventanas emergentes o abre cada pantalla por separado.';
+      }
+    });
+  </script>
+</body>
+</html>

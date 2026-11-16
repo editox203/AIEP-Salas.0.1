@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Jefatura | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+  <header class="topbar"><div class="brand">AIEP · ATENCIÓN</div><span class="role">Vista Jefatura</span><span class="connection" id="conexion">Conectando…</span></header>
+  <main class="wrap">
+    <div class="heading"><div class="eyebrow">Casos escalados</div><h1>Revisión de Jefatura</h1><p>Resuelve las solicitudes derivadas por Coordinación. La decisión se refleja en vivo para el docente.</p></div>
+    <div id="aviso" class="notice" role="status" hidden></div>
+    <section><h2 class="section-title">Tickets derivados</h2><div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div></section>
+  </main>
+  <script type="module">
+    import { obtenerTickets, cambiarEstadoTicket } from './js/supabase-ajax.js';
+    import { escucharTiempoReal } from './js/supabase-socket.js';
+    const bandeja = document.querySelector('#bandeja-jefatura');
+    const aviso = document.querySelector('#aviso');
+    const conexion = document.querySelector('#conexion');
+    const tickets = new Map();
+    const estadosVisibles = new Set(['escalated', 'accepted', 'rejected']);
+    const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const etiquetas = { escalated: 'Pendiente de decisión', accepted: 'Aceptado', rejected: 'Rechazado' };
+    function avisoTexto(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
+    function tarjeta(t) {
+      return `<article class="ticket" id="jef-${esc(t.id)}"><div class="ticket-top"><div><h3>Expediente #${esc(t.id)} · ${esc(t.room_code)}</h3><p><strong>${esc(t.category)}</strong> — ${esc(t.description)}</p><p class="muted">Docente: ${esc(t.teacher_name)} · RUT: ${esc(t.teacher_rut)}</p><p class="muted">${t.created_at ? new Date(t.created_at).toLocaleString('es-CL') : ''}</p></div><span class="badge ${esc(t.status)}">${esc(etiquetas[t.status] || t.status)}</span></div><p><strong>Nota de Coordinación:</strong> ${esc(t.escalation_notes || 'Sin notas')}</p>${t.status === 'escalated' ? `<div class="button-row"><button class="button" data-resolver="accepted" data-id="${esc(t.id)}">Aceptar</button><button class="button danger" data-resolver="rejected" data-id="${esc(t.id)}">Rechazar</button></div>` : ''}</article>`;
+    }
+    function dibujar() {
+      bandeja.innerHTML = [...tickets.values()].filter(t => estadosVisibles.has(t.status)).sort((a,b) => new Date(b.created_at) - new Date(a.created_at)).map(tarjeta).join('') || '<div class="empty">Todavía no hay tickets derivados.</div>';
+    }
+    function guardar(t) { if (estadosVisibles.has(t.status)) tickets.set(String(t.id), t); else tickets.delete(String(t.id)); dibujar(); }
+    bandeja.addEventListener('click', async e => {
+      const boton = e.target.closest('[data-resolver]'); if (!boton) return;
+      const decision = boton.dataset.resolver;
+      if (!window.confirm(`¿Confirmas ${decision === 'accepted' ? 'aceptar' : 'rechazar'} este ticket?`)) return;
+      bandeja.querySelectorAll(`[data-id="${CSS.escape(boton.dataset.id)}"]`).forEach(b => b.disabled = true);
+      try {
+        await cambiarEstadoTicket(boton.dataset.id, decision);
+        avisoTexto(`Ticket ${decision === 'accepted' ? 'aceptado' : 'rechazado'}.`, 'success');
+      } catch (error) { avisoTexto(error.message || 'No se pudo guardar la decisión.', 'error'); dibujar(); }
+    });
+    try {
+      escucharTiempoReal({
+        alCrearTicket: guardar,
+        alActualizarTicket: guardar,
+        alEstadoConexion: estado => {
+          conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
+          conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : (estado === 'CHANNEL_ERROR' || estado === 'TIMED_OUT' ? 'offline' : '')}`;
+        }
+      });
+      (await obtenerTickets()).forEach(guardar);
+      dibujar();
+    } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los casos. Configura Supabase y vuelve a cargar.</div>'; avisoTexto(error.message, 'error'); }
+  </script>
+</body>
+</html>

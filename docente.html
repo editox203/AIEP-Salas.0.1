@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Docente | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+  <header class="topbar"><div class="brand">AIEP · ATENCIÓN</div><span class="role">Vista Docente</span></header>
+  <main class="wrap">
+    <div class="heading"><div class="eyebrow">Nueva solicitud</div><h1>Hola, Abraham</h1><p>Informa un problema de sala y revisa aquí el avance de tus solicitudes.</p></div>
+    <div id="aviso" class="notice" role="status" hidden></div>
+    <section class="panel">
+      <h2>Crear ticket</h2>
+      <form id="form-docente">
+        <div class="field"><label for="sala">Sala</label><input id="sala" name="sala" placeholder="Ej.: SC-201" maxlength="40" required></div>
+        <div class="field"><label for="categoria">Categoría</label><input id="categoria" name="categoria" placeholder="Ej.: Proyector" maxlength="80" required></div>
+        <div class="field"><label for="descripcion">Descripción del problema</label><textarea id="descripcion" name="descripcion" placeholder="Describe brevemente qué ocurre…" maxlength="2000" required></textarea></div>
+        <button class="button" id="enviar" type="submit">Enviar a Coordinación</button>
+      </form>
+      <p class="small" style="margin:14px 0 0">Perfil de demostración: Abraham · 12.345.678-9. Para cambiarlo, edita <code>sesionAiep</code> en esta página.</p>
+    </section>
+    <section><h2 class="section-title">Mis solicitudes</h2><div id="estado-tickets" class="tickets"><div class="empty">Cargando solicitudes…</div></div></section>
+  </main>
+  <script type="module">
+    import { crearTicket, obtenerTickets } from './js/supabase-ajax.js';
+    import { escucharTiempoReal } from './js/supabase-socket.js';
+
+    const contenedor = document.querySelector('#estado-tickets');
+    const aviso = document.querySelector('#aviso');
+    const form = document.querySelector('#form-docente');
+    const boton = document.querySelector('#enviar');
+    const sesionAiep = { nombre: 'Abraham', rut: '12.345.678-9' };
+    const misTickets = new Map();
+    const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const etiquetas = { open: 'Abierto', escalated: 'Derivado a Jefatura', accepted: 'Aceptado', rejected: 'Rechazado' };
+    function mostrarAviso(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
+    function tarjeta(t) {
+      return `<article class="ticket" id="ticket-${esc(t.id)}"><div class="ticket-top"><div><h3>Ticket #${esc(t.id)} · ${esc(t.room_code)}</h3><p><strong>${esc(t.category)}</strong> — ${esc(t.description)}</p><p class="muted">${t.created_at ? new Date(t.created_at).toLocaleString('es-CL') : ''}</p></div><span class="badge ${esc(t.status)}">${esc(etiquetas[t.status] || t.status)}</span></div>${t.escalation_notes ? `<p><strong>Nota de Coordinación:</strong> ${esc(t.escalation_notes)}</p>` : ''}</article>`;
+    }
+    function guardarTicket(t) {
+      if (t.teacher_rut !== sesionAiep.rut) return;
+      misTickets.set(String(t.id), t);
+      contenedor.innerHTML = [...misTickets.values()].sort((a,b) => new Date(b.created_at) - new Date(a.created_at)).map(tarjeta).join('') || '<div class="empty">Aún no tienes solicitudes.</div>';
+    }
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); boton.disabled = true; mostrarAviso('Enviando solicitud…');
+      try {
+        const fd = new FormData(form);
+        const creado = await crearTicket(fd.get('sala'), fd.get('categoria'), fd.get('descripcion'), sesionAiep);
+        if (creado) guardarTicket(creado);
+        form.reset(); mostrarAviso('Ticket enviado correctamente a Coordinación.', 'success');
+      } catch (error) { mostrarAviso(error.message || 'No se pudo enviar el ticket.', 'error'); }
+      finally { boton.disabled = false; }
+    });
+    try {
+      escucharTiempoReal({
+        alCrearTicket: guardarTicket,
+        alActualizarTicket: guardarTicket,
+        alEstadoConexion: estado => { if (estado === 'CHANNEL_ERROR' || estado === 'TIMED_OUT') mostrarAviso('Sin conexión en tiempo real; revisa Supabase y la red.', 'error'); }
+      });
+      const lista = await obtenerTickets();
+      lista.filter(t => t.teacher_rut === sesionAiep.rut).forEach(guardarTicket);
+      if (!misTickets.size) contenedor.innerHTML = '<div class="empty">Aún no tienes solicitudes.</div>';
+    } catch (error) { contenedor.innerHTML = '<div class="empty">No se pudieron cargar los tickets. Revisa la configuración de Supabase.</div>'; mostrarAviso(error.message, 'error'); }
+  </script>
+</body>
+</html>
