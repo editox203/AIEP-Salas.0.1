@@ -2,187 +2,84 @@
 <html lang="es">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Docente | Sistema de Salas AIEP</title><link rel="stylesheet" href="./css/app.css">
+  <title>Docente | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">AIEP · SALAS</div>
-    <span class="role" id="info-usuario">Vista Docente</span>
-    <button class="button secondary" id="btn-salir" style="padding:6px 12px;">Salir</button>
+    <div class="brand">AIEP · ATENCIÓN</div>
+    <span class="role" id="rol-nombre">Vista Docente</span>
+    <button class="button secondary" id="btn-salir" style="padding:4px 10px;font-size:12px;">Salir</button>
   </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Panel Docente</div><h1 id="saludo">Hola</h1><p>Consulta la disponibilidad por bloque en tiempo real y gestiona tus solicitudes.</p></div>
+    <div class="heading"><div class="eyebrow">Nueva solicitud</div><h1 id="titulo-docente">Hola, Docente</h1><p>Informa un problema de sala y revisa aquí el avance de tus solicitudes.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
-
     <section class="panel">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <h2 style="margin:0;">Salas en tiempo real</h2>
-        <div class="field" style="margin:0;">
-          <select id="filtro-bloque">
-            <option value="08:30:00">Bloque 1 (08:30 - 10:00)</option>
-            <option value="10:15:00">Bloque 2 (10:15 - 11:45)</option>
-            <option value="12:00:00">Bloque 3 (12:00 - 13:30)</option>
-            <option value="14:00:00">Bloque 4 (14:00 - 15:30)</option>
-          </select>
-        </div>
-      </div>
-      <div id="grid-salas" class="salas-grid"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Solicitar cambio de sala</h2>
+      <h2>Crear ticket</h2>
       <form id="form-docente">
-        <div class="field"><label>Docente (Autorellenado)</label><input id="docente-auto" readonly></div>
-        <div class="field"><label>Sala asignada actualmente (Autorellenado)</label><input id="sala-actual-auto" readonly><input type="hidden" id="sala-actual-id"></div>
-        <div class="field"><label for="sala-preferida">Sala que necesitas</label><select id="sala-preferida" required></select></div>
-        <div class="field"><label for="bloque-ticket">Bloque horario</label>
-          <select id="bloque-ticket" required>
-            <option value="Bloque 1|08:30:00|10:00:00">Bloque 1 (08:30 - 10:00)</option>
-            <option value="Bloque 2|10:15:00|11:45:00">Bloque 2 (10:15 - 11:45)</option>
-            <option value="Bloque 3|12:00:00|13:30:00">Bloque 3 (12:00 - 13:30)</option>
-            <option value="Bloque 4|14:00:00|15:30:00">Bloque 4 (14:00 - 15:30)</option>
-          </select>
-        </div>
-        <div class="field"><label for="motivo">Motivo / Por qué la necesitas</label><textarea id="motivo" placeholder="Ej: Necesito laboratorio con AutoCAD para evaluación…" required></textarea></div>
+        <div class="field"><label for="sala">ID Sala Actual</label><input id="sala" name="sala_actual_id" placeholder="ID de la sala" required></div>
+        <div class="field"><label for="bloque">Bloque horario</label><input id="bloque" name="bloque" placeholder="Ej: 3" required></div>
+        <div class="field"><label for="motivo">Motivo / Descripción</label><textarea id="motivo" name="motivo" placeholder="Describe brevemente qué ocurre…" required></textarea></div>
         <button class="button" id="enviar" type="submit">Enviar a Coordinación</button>
       </form>
     </section>
-
-    <section id="panel-chat" class="panel" hidden>
-      <h2>Chat privado con Coordinación · Ticket #<span id="chat-id"></span></h2>
-      <div id="chat-mensajes" style="max-height:190px;overflow-y:auto;margin-bottom:12px;padding:10px;background:#f8fafc;border:1px solid #e4e8f0;border-radius:9px;"></div>
-      <div class="field" style="display:flex;gap:8px;">
-        <input id="chat-input" placeholder="Escribe tu mensaje…">
-        <button class="button" id="chat-enviar" type="button">Enviar</button>
-      </div>
-    </section>
-
-    <section><h2 class="section-title">Mis solicitudes (Solo propias)</h2><div id="estado-tickets" class="tickets"></div></section>
+    <section><h2 class="section-title">Mis solicitudes</h2><div id="estado-tickets" class="tickets"><div class="empty">Cargando solicitudes…</div></div></section>
   </main>
-
   <script type="module">
-    import { verificarAcceso, cerrarSesion, obtenerSalasPorBloque, crearTicket, obtenerTickets, obtenerMensajesChat, enviarMensajeChat } from './js/supabase-ajax.js';
+    import { verificarAcceso, cerrarSesion, crearTicket, obtenerTickets } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
     const sesion = verificarAcceso('user');
-    document.querySelector('#btn-salir').onclick = cerrarSesion;
-    document.querySelector('#saludo').textContent = `Hola, ${sesion.nombre}`;
-    document.querySelector('#docente-auto').value = `${sesion.nombre} · RUT: ${sesion.rut}`;
+    if (!sesion) throw new Error('Acceso no autorizado');
 
-    const hoy = new Date().toISOString().split('T')[0];
-    const filtroBloque = document.querySelector('#filtro-bloque');
+    document.querySelector('#titulo-docente').textContent = `Hola, ${sesion.nombre}`;
+    document.querySelector('#btn-salir').addEventListener('click', cerrarSesion);
+
+    const contenedor = document.querySelector('#estado-tickets');
     const aviso = document.querySelector('#aviso');
-    let chatTicketActual = null;
+    const form = document.querySelector('#form-docente');
+    const boton = document.querySelector('#enviar');
+    const misTickets = new Map();
 
-    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const etiquetas = {
-      pendiente_coordinacion: 'En Coordinación',
-      pendiente_administracion: 'En Administración',
-      aprobado: 'Aprobado',
-      rechazado: 'Rechazado'
-    };
+    const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const etiquetas = { pendiente_coordinacion: 'Abierto (Pendiente Coordinación)', pendiente_administracion: 'Derivado a Administración', aprobado: 'Aprobado', rechazado: 'Rechazado' };
 
     function mostrarAviso(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
-
-    async function cargarSalas() {
-      const salas = await obtenerSalasPorBloque(hoy, filtroBloque.value);
-      document.querySelector('#grid-salas').innerHTML = salas.map(s => `
-        <article class="ticket">
-          <div class="ticket-top">
-            <div>
-              <h3>Sala ${esc(s.numero_sala)}</h3>
-              <p class="muted">${esc(s.categoria)}</p>
-              <p>Docente: <strong>${esc(s.docente_nombre) || '—'}</strong></p>
-              <p class="muted">Horario: ${esc(s.horario) || '—'}</p>
-            </div>
-            <span class="badge ${s.ocupada ? 'rejected' : 'accepted'}">${s.ocupada ? 'Ocupada' : 'Disponible'}</span>
-          </div>
-        </article>
-      `).join('');
-
-      const miSala = salas.find(s => s.docente_id === sesion.id);
-      document.querySelector('#sala-actual-auto').value = miSala ? `Sala ${miSala.numero_sala} (${miSala.categoria})` : 'Sin sala asignada en este bloque';
-      document.querySelector('#sala-actual-id').value = miSala ? miSala.sala_id : '';
-
-      const selectPref = document.querySelector('#sala-preferida');
-      if (!selectPref.options.length) {
-        selectPref.innerHTML = salas.map(s => `<option value="${s.sala_id}">Sala ${esc(s.numero_sala)} (${esc(s.categoria)})</option>`).join('');
-      }
+    
+    function tarjeta(t) {
+      return `<article class="ticket" id="ticket-${esc(t.id)}"><div class="ticket-top"><div><h3>Ticket #${esc(t.id)}</h3><p><strong>Motivo:</strong> ${esc(t.motivo)}</p><p class="muted">Bloque: ${esc(t.bloque)} · Fecha: ${t.fecha_creacion ? new Date(t.fecha_creacion).toLocaleString('es-CL') : ''}</p></div><span class="badge ${esc(t.estado)}">${esc(etiquetas[t.estado] || t.estado)}</span></div>${t.mensaje_admin ? `<p><strong>Respuesta Admin:</strong> ${esc(t.mensaje_admin)}</p>` : ''}</article>`;
     }
 
-    async function cargarMisTickets() {
-      const todos = await obtenerTickets();
-      const propios = todos.filter(t => t.usuario_id === sesion.id);
-      document.querySelector('#estado-tickets').innerHTML = propios.map(t => `
-        <article class="ticket">
-          <div class="ticket-top">
-            <div>
-              <h3>Ticket #${t.id} · Solicita Sala ${esc(t.sala_preferida?.numero_sala)}</h3>
-              <p><strong>${esc(t.bloque)}</strong> — ${esc(t.motivo)}</p>
-              ${t.estado === 'aprobado' ? `<p style="color:var(--green);"><strong>Sala Final Asignada: ${esc(t.sala_final?.numero_sala)}</strong> · Mensaje Admin: ${esc(t.mensaje_admin)}</p>` : ''}
-              ${t.estado === 'rechazado' ? `<p style="color:var(--red);"><strong>Motivo rechazo:</strong> ${esc(t.mensaje_admin)}</p>` : ''}
-            </div>
-            <span class="badge ${t.estado === 'aprobado' ? 'accepted' : (t.estado === 'rechazado' ? 'rejected' : 'open')}">${etiquetas[t.estado]}</span>
-          </div>
-          <div class="button-row"><button class="button secondary" data-chat="${t.id}">Abrir Chat con Coordinación</button></div>
-        </article>
-      `).join('') || '<div class="empty">Aún no tienes solicitudes propias.</div>';
+    function guardarTicket(t) {
+      if (t.usuario_id !== sesion.id) return;
+      misTickets.set(String(t.id), t);
+      contenedor.innerHTML = [...misTickets.values()].sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion)).map(tarjeta).join('') || '<div class="empty">Aún no tienes solicitudes.</div>';
     }
 
-    async function refrescarChat() {
-      if (!chatTicketActual) return;
-      const msgs = await obtenerMensajesChat(chatTicketActual);
-      document.querySelector('#chat-mensajes').innerHTML = msgs.map(m =>
-        `<p style="margin:4px 0;"><strong>${esc(m.emisor?.nombre)}:</strong> ${esc(m.mensaje)}</p>`
-      ).join('') || '<p class="muted">Sin mensajes aún.</p>';
-    }
-
-    document.querySelector('#estado-tickets').addEventListener('click', async e => {
-      const btn = e.target.closest('[data-chat]');
-      if (!btn) return;
-      chatTicketActual = btn.dataset.chat;
-      document.querySelector('#chat-id').textContent = chatTicketActual;
-      document.querySelector('#panel-chat').hidden = false;
-      await refrescarChat();
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); boton.disabled = true; mostrarAviso('Enviando solicitud…');
+      try {
+        const payload = {
+          usuario_id: sesion.id,
+          sala_actual_id: document.querySelector('#sala').value.trim(),
+          bloque: document.querySelector('#bloque').value.trim(),
+          motivo: document.querySelector('#motivo').value.trim()
+        };
+        const creado = await crearTicket(payload);
+        if (creado) guardarTicket(creado);
+        form.reset(); mostrarAviso('Ticket enviado correctamente.', 'success');
+      } catch (error) { mostrarAviso(error.message || 'No se pudo enviar el ticket.', 'error'); }
+      finally { boton.disabled = false; }
     });
 
-    document.querySelector('#chat-enviar').onclick = async () => {
-      const input = document.querySelector('#chat-input');
-      if (!input.value.trim()) return;
-      await enviarMensajeChat(chatTicketActual, sesion.id, input.value.trim());
-      input.value = '';
-      await refrescarChat();
-    };
-
-    document.querySelector('#form-docente').addEventListener('submit', async e => {
-      e.preventDefault();
-      const [bloque, hora_inicio, hora_fin] = document.querySelector('#bloque-ticket').value.split('|');
-      await crearTicket({
-        usuario_id: sesion.id,
-        sala_actual_id: document.querySelector('#sala-actual-id').value || null,
-        sala_preferida_id: document.querySelector('#sala-preferida').value,
-        motivo: document.querySelector('#motivo').value.trim(),
-        fecha_necesitada: hoy,
-        bloque,
-        hora_inicio,
-        hora_fin
+    try {
+      escucharTiempoReal({
+        alCrearTicket: guardarTicket,
+        alActualizarTicket: guardarTicket
       });
-      document.querySelector('#motivo').value = '';
-      mostrarAviso('Ticket enviado a Coordinación.', 'success');
-      await cargarMisTickets();
-    });
-
-    filtroBloque.onchange = cargarSalas;
-
-    escucharTiempoReal({
-      alCrearTicket: cargarMisTickets,
-      alActualizarTicket: cargarMisTickets,
-      alCambiarSalas: cargarSalas,
-      alNuevoMensajeChat: refrescarChat
-    });
-
-    await cargarSalas();
-    await cargarMisTickets();
+      const lista = await obtenerTickets();
+      lista.filter(t => t.usuario_id === sesion.id).forEach(guardarTicket);
+      if (!misTickets.size) contenedor.innerHTML = '<div class="empty">Aún no tienes solicitudes.</div>';
+    } catch (error) { contenedor.innerHTML = '<div class="empty">No se pudieron cargar los tickets.</div>'; mostrarAviso(error.message, 'error'); }
   </script>
 </body>
 </html>
