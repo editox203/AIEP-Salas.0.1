@@ -3,12 +3,6 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Docente | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
-  <style>
-    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-    .tab-btn { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; cursor: pointer; font-weight: 600; }
-    .tab-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
-    .tab-panel[hidden] { display: none; }
-  </style>
 </head>
 <body>
   <header class="topbar">
@@ -17,16 +11,15 @@
     <button class="button secondary" id="btn-salir" style="padding:4px 10px;font-size:12px;">Salir</button>
   </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Portal Docente</div><h1 id="titulo-docente">Hola, Docente</h1><p>Gestiona tus solicitudes y consulta la disponibilidad de salas.</p></div>
+    <div class="heading"><div class="eyebrow">Portal Docente</div><h1 id="titulo-docente">Hola, Docente</h1><p>Gestiona tus solicitudes y consulta la disponibilidad de hoy y reservas de mañana.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
 
     <nav class="tabs" role="tablist" aria-label="Secciones Docente">
       <button type="button" class="tab-btn active" data-tab="tab-solicitud">Nueva solicitud</button>
-      <button type="button" class="tab-btn" data-tab="tab-salas">Salas disponibles</button>
+      <button type="button" class="tab-btn" data-tab="tab-calendario">Calendario Hoy / Mañana</button>
       <button type="button" class="tab-btn" data-tab="tab-mis-tickets">Mis solicitudes</button>
     </nav>
 
-    <!-- Pestaña 1: Nueva solicitud -->
     <section id="tab-solicitud" class="panel tab-panel">
       <h2>Crear ticket</h2>
       <form id="form-docente">
@@ -47,13 +40,17 @@
       </form>
     </section>
 
-    <!-- Pestaña 2: Salas disponibles -->
-    <section id="tab-salas" class="panel tab-panel" hidden>
-      <h2>Salas disponibles</h2>
-      <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
+    <section id="tab-calendario" class="panel tab-panel" hidden>
+      <div class="cal-toolbar">
+        <div>
+          <h2 style="margin:0;">Calendario de Salas · Hoy y Mañana</h2>
+          <p class="small" id="fechas-calendario" style="margin:4px 0 0;">Cargando fechas…</p>
+        </div>
+        <button type="button" class="button secondary" id="btn-refrescar-cal">Actualizar</button>
+      </div>
+      <div id="calendario-salas" class="cal-grid"><div class="empty">Cargando calendario…</div></div>
     </section>
 
-    <!-- Pestaña 3: Mis solicitudes -->
     <section id="tab-mis-tickets" class="panel tab-panel" hidden>
       <h2 class="section-title">Mis solicitudes</h2>
       <div id="estado-tickets" class="tickets"><div class="empty">Cargando solicitudes…</div></div>
@@ -61,7 +58,7 @@
   </main>
 
   <script type="module">
-    import { verificarAcceso, cerrarSesion, crearTicket, obtenerTickets, obtenerHorariosProfesor, obtenerSalasDisponibles } from './js/supabase-ajax.js';
+    import { verificarAcceso, cerrarSesion, crearTicket, obtenerTickets, obtenerHorariosProfesor, obtenerCalendarioSalas } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
     const sesion = verificarAcceso('user');
@@ -70,7 +67,6 @@
     document.querySelector('#titulo-docente').textContent = `Hola, ${sesion.nombre}`;
     document.querySelector('#btn-salir').addEventListener('click', cerrarSesion);
 
-    // Cambio de pestañas
     const tabBtns = [...document.querySelectorAll('.tab-btn')];
     const tabPanels = [...document.querySelectorAll('.tab-panel')];
     tabBtns.forEach(btn => {
@@ -81,7 +77,8 @@
     });
 
     const contenedor = document.querySelector('#estado-tickets');
-    const contenedorSalas = document.querySelector('#salas-disponibles');
+    const contenedorCalendario = document.querySelector('#calendario-salas');
+    const fechasCalendario = document.querySelector('#fechas-calendario');
     const selectHorario = document.querySelector('#horario-asignado');
     const aviso = document.querySelector('#aviso');
     const form = document.querySelector('#form-docente');
@@ -127,34 +124,51 @@
       }
     });
 
-    async function cargarSalas() {
+    async function cargarCalendario() {
       try {
-        const fechaSel = document.querySelector('#fecha-necesitada').value;
-        const salas = await obtenerSalasDisponibles({ fecha: fechaSel });
-        if (!Array.isArray(salas) || !salas.length) {
-          contenedorSalas.innerHTML = '<div class="empty">No hay salas registradas.</div>';
+        const data = await obtenerCalendarioSalas();
+        fechasCalendario.textContent = `Hoy: ${esc(data.hoy)} · Mañana: ${esc(data.manana)}`;
+        const salas = Array.isArray(data.salas) ? data.salas : [];
+        if (!salas.length) {
+          contenedorCalendario.innerHTML = '<div class="empty">No hay salas registradas.</div>';
           return;
         }
-        contenedorSalas.innerHTML = salas.map(s => `
-          <article class="ticket">
-            <div class="ticket-top">
-              <div>
-                <h3>Sala ${esc(s.numero_sala)} (ID: ${esc(s.id)})</h3>
-                <p class="muted">Categoría: ${esc(s.categoria || 'General')} · Sede: ${esc(s.sede || 'AIEP')}</p>
+        contenedorCalendario.innerHTML = salas.map(s => {
+          const hoyHtml = s.disponible_hoy
+            ? '<div class="cal-slot libre">Disponible hoy</div>'
+            : (s.bloques_hoy || []).map(b => `<div class="cal-slot ocupado">Hoy ${esc(String(b.hora_inicio || '').slice(0,5))} - ${esc(String(b.hora_fin || '').slice(0,5))} · ${esc(b.usuario?.nombre || 'Ocupada')}</div>`).join('');
+
+          const mananaHtml = (s.reservas_manana || []).length
+            ? (s.reservas_manana || []).map(b => `<div class="cal-slot manana">Mañana ${esc(String(b.hora_inicio || '').slice(0,5))} - ${esc(String(b.hora_fin || '').slice(0,5))} · ${esc(b.usuario?.nombre || 'Reservada')}</div>`).join('')
+            : '<div class="cal-slot">Sin reservas agendadas para mañana</div>';
+
+          return `
+            <article class="cal-card">
+              <div class="cal-card-head">
+                <h3>Sala ${esc(s.numero_sala)}</h3>
+                <span class="badge ${s.disponible_hoy ? 'aprobado' : 'rechazado'}">${s.disponible_hoy ? 'Libre hoy' : 'Ocupada hoy'}</span>
               </div>
-              <span class="badge ${s.disponible ? 'aprobado' : 'rechazado'}">${s.disponible ? 'Disponible' : 'Ocupada'}</span>
-            </div>
-            <div class="button-row">
-              <button type="button" class="button secondary" data-usar-sala="${esc(s.id)}">Usar como preferida</button>
-            </div>
-          </article>
-        `).join('');
+              <p class="small" style="margin:0;">${esc(s.categoria || 'General')} · ${esc(s.sede || 'AIEP')}</p>
+              <div>
+                <div class="cal-section-label">Hoy (${esc(data.hoy)})</div>
+                <div class="tickets" style="gap:6px;">${hoyHtml}</div>
+              </div>
+              <div>
+                <div class="cal-section-label">Mañana (${esc(data.manana)})</div>
+                <div class="tickets" style="gap:6px;">${mananaHtml}</div>
+              </div>
+              <div class="button-row">
+                <button type="button" class="button secondary" data-usar-sala="${esc(s.id)}">Usar como preferida</button>
+              </div>
+            </article>
+          `;
+        }).join('');
       } catch (e) {
-        contenedorSalas.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+        contenedorCalendario.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
       }
     }
 
-    contenedorSalas.addEventListener('click', e => {
+    contenedorCalendario.addEventListener('click', e => {
       const btn = e.target.closest('[data-usar-sala]');
       if (!btn) return;
       document.querySelector('#sala-preferida').value = btn.dataset.usarSala;
@@ -162,7 +176,7 @@
       mostrarAviso(`Sala #${btn.dataset.usarSala} asignada como preferida.`, 'success');
     });
 
-    document.querySelector('#fecha-necesitada').addEventListener('change', cargarSalas);
+    document.querySelector('#btn-refrescar-cal').addEventListener('click', cargarCalendario);
 
     form.addEventListener('submit', async e => {
       e.preventDefault(); boton.disabled = true; mostrarAviso('Enviando solicitud…');
@@ -181,14 +195,14 @@
         if (creado) guardarTicket(creado);
         form.reset();
         mostrarAviso('Ticket enviado correctamente.', 'success');
-        await cargarSalas();
+        await cargarCalendario();
       } catch (error) { mostrarAviso(error.message || 'No se pudo enviar el ticket.', 'error'); }
       finally { boton.disabled = false; }
     });
 
     try {
       escucharTiempoReal({ alCrearTicket: guardarTicket, alActualizarTicket: guardarTicket });
-      await Promise.all([cargarHorarios(), cargarSalas()]);
+      await Promise.all([cargarHorarios(), cargarCalendario()]);
       const lista = await obtenerTickets();
       lista.filter(t => t.usuario_id === sesion.id).forEach(guardarTicket);
       if (!misTickets.size) contenedor.innerHTML = '<div class="empty">Aún no tienes solicitudes.</div>';

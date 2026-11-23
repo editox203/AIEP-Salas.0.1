@@ -87,6 +87,10 @@ export function obtenerSalasDisponibles({ fecha = '', sede = '' } = {}) {
   return llamarAPI('salas_disponibles', { params: `${f}${s}` });
 }
 
+export function obtenerCalendarioSalas() {
+  return llamarAPI('calendario_salas');
+}
+
 export function reservarSalaManana(payload) {
   return llamarAPI('reservar_manana', { method: 'POST', body: payload });
 }

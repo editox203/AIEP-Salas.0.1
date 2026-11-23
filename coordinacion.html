@@ -3,12 +3,6 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Coordinación | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
-  <style>
-    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-    .tab-btn { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; cursor: pointer; font-weight: 600; }
-    .tab-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
-    .tab-panel[hidden] { display: none; }
-  </style>
 </head>
 <body>
   <header class="topbar">
@@ -18,12 +12,12 @@
     <button class="button secondary" id="btn-salir" style="padding:4px 10px;font-size:12px;">Salir</button>
   </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Bandeja de entrada</div><h1>Solicitudes de sala</h1><p>Revisa los tickets y deriva a Administración los casos necesarios.</p></div>
+    <div class="heading"><div class="eyebrow">Bandeja de entrada</div><h1>Solicitudes de sala</h1><p>Revisa los tickets, deriva a Administración y consulta el calendario de hoy y mañana.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
 
     <nav class="tabs" role="tablist" aria-label="Secciones Coordinación">
       <button type="button" class="tab-btn active" data-tab="tab-tickets">Tickets</button>
-      <button type="button" class="tab-btn" data-tab="tab-salas">Salas disponibles</button>
+      <button type="button" class="tab-btn" data-tab="tab-calendario">Calendario Hoy / Mañana</button>
     </nav>
 
     <section id="tab-tickets" class="tab-panel">
@@ -31,14 +25,20 @@
       <div id="bandeja-coordinacion" class="tickets"><div class="empty">Cargando tickets…</div></div>
     </section>
 
-    <section id="tab-salas" class="panel tab-panel" hidden>
-      <h2>Salas disponibles</h2>
-      <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
+    <section id="tab-calendario" class="panel tab-panel" hidden>
+      <div class="cal-toolbar">
+        <div>
+          <h2 style="margin:0;">Calendario de Salas · Hoy y Mañana</h2>
+          <p class="small" id="fechas-calendario" style="margin:4px 0 0;">Cargando fechas…</p>
+        </div>
+        <button type="button" class="button secondary" id="btn-refrescar-cal">Actualizar</button>
+      </div>
+      <div id="calendario-salas" class="cal-grid"><div class="empty">Cargando calendario…</div></div>
     </section>
   </main>
 
   <script type="module">
-    import { verificarAcceso, cerrarSesion, obtenerTickets, derivarTicket, obtenerSalasDisponibles } from './js/supabase-ajax.js';
+    import { verificarAcceso, cerrarSesion, obtenerTickets, derivarTicket, obtenerCalendarioSalas } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
     const sesion = verificarAcceso('admin');
@@ -56,7 +56,8 @@
     });
 
     const bandeja = document.querySelector('#bandeja-coordinacion');
-    const contenedorSalas = document.querySelector('#salas-disponibles');
+    const contenedorCalendario = document.querySelector('#calendario-salas');
+    const fechasCalendario = document.querySelector('#fechas-calendario');
     const aviso = document.querySelector('#aviso');
     const conexion = document.querySelector('#conexion');
     const tickets = new Map();
@@ -76,24 +77,48 @@
 
     function guardar(t) { tickets.set(String(t.id), t); dibujar(); }
 
-    async function cargarSalas() {
+    async function cargarCalendario() {
       try {
-        const salas = await obtenerSalasDisponibles();
-        contenedorSalas.innerHTML = (salas || []).map(s => `
-          <article class="ticket">
-            <div class="ticket-top">
-              <div>
-                <h3>Sala ${esc(s.numero_sala)} (ID: ${esc(s.id)})</h3>
-                <p class="muted">Categoría: ${esc(s.categoria || 'General')} · Sede: ${esc(s.sede || 'AIEP')}</p>
+        const data = await obtenerCalendarioSalas();
+        fechasCalendario.textContent = `Hoy: ${esc(data.hoy)} · Mañana: ${esc(data.manana)}`;
+        const salas = Array.isArray(data.salas) ? data.salas : [];
+        if (!salas.length) {
+          contenedorCalendario.innerHTML = '<div class="empty">No hay salas registradas.</div>';
+          return;
+        }
+        contenedorCalendario.innerHTML = salas.map(s => {
+          const hoyHtml = s.disponible_hoy
+            ? '<div class="cal-slot libre">Disponible hoy</div>'
+            : (s.bloques_hoy || []).map(b => `<div class="cal-slot ocupado">Hoy ${esc(String(b.hora_inicio || '').slice(0,5))} - ${esc(String(b.hora_fin || '').slice(0,5))} · ${esc(b.usuario?.nombre || 'Ocupada')}</div>`).join('');
+
+          const mananaHtml = (s.reservas_manana || []).length
+            ? (s.reservas_manana || []).map(b => `<div class="cal-slot manana">Mañana ${esc(String(b.hora_inicio || '').slice(0,5))} - ${esc(String(b.hora_fin || '').slice(0,5))} · ${esc(b.usuario?.nombre || 'Reservada')}</div>`).join('')
+            : '<div class="cal-slot">Sin reservas agendadas para mañana</div>';
+
+          return `
+            <article class="cal-card">
+              <div class="cal-card-head">
+                <h3>Sala ${esc(s.numero_sala)}</h3>
+                <span class="badge ${s.disponible_hoy ? 'aprobado' : 'rechazado'}">${s.disponible_hoy ? 'Libre hoy' : 'Ocupada hoy'}</span>
               </div>
-              <span class="badge ${s.disponible ? 'aprobado' : 'rechazado'}">${s.disponible ? 'Disponible' : 'Ocupada'}</span>
-            </div>
-          </article>
-        `).join('') || '<div class="empty">No hay salas disponibles.</div>';
+              <p class="small" style="margin:0;">${esc(s.categoria || 'General')} · ${esc(s.sede || 'AIEP')}</p>
+              <div>
+                <div class="cal-section-label">Hoy (${esc(data.hoy)})</div>
+                <div class="tickets" style="gap:6px;">${hoyHtml}</div>
+              </div>
+              <div>
+                <div class="cal-section-label">Mañana (${esc(data.manana)})</div>
+                <div class="tickets" style="gap:6px;">${mananaHtml}</div>
+              </div>
+            </article>
+          `;
+        }).join('');
       } catch (e) {
-        contenedorSalas.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+        contenedorCalendario.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
       }
     }
+
+    document.querySelector('#btn-refrescar-cal').addEventListener('click', cargarCalendario);
 
     bandeja.addEventListener('click', async e => {
       const boton = e.target.closest('[data-derivar]'); if (!boton) return;
@@ -113,7 +138,7 @@
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
         }
       });
-      await cargarSalas();
+      await cargarCalendario();
       (await obtenerTickets()).forEach(guardar);
       if (!tickets.size) dibujar();
     } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los tickets.</div>'; avisoTexto(error.message, 'error'); }

@@ -56,13 +56,17 @@ export default async function handler(req, res) {
     return Number(filas[0].id);
   }
 
-  function obtenerFechaMananaChile() {
+  function obtenerFechaChile(offsetDias = 0) {
     const ahoraChile = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Santiago' }));
-    ahoraChile.setDate(ahoraChile.getDate() + 1);
+    ahoraChile.setDate(ahoraChile.getDate() + offsetDias);
     const yyyy = ahoraChile.getFullYear();
     const mm = String(ahoraChile.getMonth() + 1).padStart(2, '0');
     const dd = String(ahoraChile.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function obtenerFechaMananaChile() {
+    return obtenerFechaChile(1);
   }
 
   try {
@@ -102,17 +106,16 @@ export default async function handler(req, res) {
 
       case 'salas_disponibles': {
         const { fecha, sede } = req.query;
+        const fechaObjetivo = fecha || obtenerFechaChile(0);
         let querySalas = '/salas?select=*&order=numero_sala.asc';
         if (sede) {
           querySalas += `&sede=eq.${encodeURIComponent(sede)}`;
         }
         const salas = await llamarSupabase(querySalas);
 
-        let queryOcupadas = '/sala_diaria?select=sala_id,fecha,hora_inicio,hora_fin,estado,usuario_id';
-        if (fecha) {
-          queryOcupadas += `&fecha=eq.${encodeURIComponent(fecha)}`;
-        }
-        const ocupaciones = await llamarSupabase(queryOcupadas);
+        const ocupaciones = await llamarSupabase(
+          `/sala_diaria?fecha=eq.${encodeURIComponent(fechaObjetivo)}&select=sala_id,fecha,hora_inicio,hora_fin,estado,usuario_id,usuario:usuarios!usuario_id(id,nombre)`
+        );
 
         const mapaOcupadas = new Map();
         for (const oc of (ocupaciones || [])) {
@@ -128,12 +131,60 @@ export default async function handler(req, res) {
           const bloquesOcupados = mapaOcupadas.get(s.id) || [];
           return {
             ...s,
+            fecha_consultada: fechaObjetivo,
             disponible: bloquesOcupados.length === 0,
             bloques_ocupados: bloquesOcupados
           };
         });
 
         return res.status(200).json(resultado);
+      }
+
+      case 'calendario_salas': {
+        const fechaHoy = obtenerFechaChile(0);
+        const fechaManana = obtenerFechaChile(1);
+
+        const [salas, reservasHoy, reservasManana] = await Promise.all([
+          llamarSupabase('/salas?select=*&order=numero_sala.asc'),
+          llamarSupabase(`/sala_diaria?fecha=eq.${encodeURIComponent(fechaHoy)}&select=sala_id,fecha,hora_inicio,hora_fin,numero_sala,nrc,categoria,sede,estado,usuario_id,usuario:usuarios!usuario_id(id,nombre)&order=hora_inicio.asc`),
+          llamarSupabase(`/sala_diaria?fecha=eq.${encodeURIComponent(fechaManana)}&select=sala_id,fecha,hora_inicio,hora_fin,numero_sala,nrc,categoria,sede,estado,usuario_id,usuario:usuarios!usuario_id(id,nombre)&order=hora_inicio.asc`)
+        ]);
+
+        const esOcupado = oc => {
+          const est = String(oc.estado ?? '').toLowerCase();
+          return oc.estado === 1 || est === '1' || est === 'ocupada' || est === 'bloqueada';
+        };
+
+        const hoyPorSala = new Map();
+        for (const r of (reservasHoy || [])) {
+          if (!esOcupado(r)) continue;
+          if (!hoyPorSala.has(r.sala_id)) hoyPorSala.set(r.sala_id, []);
+          hoyPorSala.get(r.sala_id).push(r);
+        }
+
+        const mananaPorSala = new Map();
+        for (const r of (reservasManana || [])) {
+          if (!esOcupado(r)) continue;
+          if (!mananaPorSala.has(r.sala_id)) mananaPorSala.set(r.sala_id, []);
+          mananaPorSala.get(r.sala_id).push(r);
+        }
+
+        const salasCalendario = (salas || []).map(s => {
+          const bloquesHoy = hoyPorSala.get(s.id) || [];
+          const bloquesManana = mananaPorSala.get(s.id) || [];
+          return {
+            ...s,
+            disponible_hoy: bloquesHoy.length === 0,
+            bloques_hoy: bloquesHoy,
+            reservas_manana: bloquesManana
+          };
+        });
+
+        return res.status(200).json({
+          hoy: fechaHoy,
+          manana: fechaManana,
+          salas: salasCalendario
+        });
       }
 
       case 'reservar_manana': {
