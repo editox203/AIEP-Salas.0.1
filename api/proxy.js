@@ -89,6 +89,44 @@ export default async function handler(req, res) {
         return res.status(200).json(usuarios || []);
       }
 
+      case 'mensajes_privados': {
+        const usuarioId = Number(req.query.usuario_id);
+        const otroUsuarioId = req.query.otro_usuario_id ? Number(req.query.otro_usuario_id) : null;
+
+        if (!usuarioId) {
+          return res.status(400).json({ error: 'Falta usuario_id.' });
+        }
+
+        let endpoint = `/mensajes_privados?or=(remitente_id.eq.${usuarioId},destinatario_id.eq.${usuarioId})&select=*,remitente:usuarios!remitente_id(id,nombre,rol),destinatario:usuarios!destinatario_id(id,nombre,rol)&order=fecha_envio.asc&limit=100`;
+
+        if (otroUsuarioId) {
+          endpoint = `/mensajes_privados?or=(and(remitente_id.eq.${usuarioId},destinatario_id.eq.${otroUsuarioId}),and(remitente_id.eq.${otroUsuarioId},destinatario_id.eq.${usuarioId}))&select=*,remitente:usuarios!remitente_id(id,nombre,rol),destinatario:usuarios!destinatario_id(id,nombre,rol)&order=fecha_envio.asc&limit=100`;
+        }
+
+        const mensajes = await llamarSupabase(endpoint);
+        return res.status(200).json(mensajes || []);
+      }
+
+      case 'enviar_mensaje_privado': {
+        const { remitente_id, destinatario_id, mensaje } = req.body || {};
+        const remId = Number(remitente_id);
+        const destId = Number(destinatario_id);
+        const texto = String(mensaje || '').trim();
+
+        if (!remId || !destId || !texto) {
+          return res.status(400).json({ error: 'Falta remitente_id, destinatario_id o mensaje.' });
+        }
+
+        const creado = await llamarSupabase('/mensajes_privados', 'POST', {
+          remitente_id: remId,
+          destinatario_id: destId,
+          mensaje: texto
+        });
+
+        const msgObj = Array.isArray(creado) ? creado[0] : creado;
+        return res.status(200).json(msgObj);
+      }
+
       case 'horarios_profesor': {
         const usuarioId = req.query.usuario_id;
         if (!usuarioId) {

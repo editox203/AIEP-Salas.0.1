@@ -16,7 +16,7 @@
     <div class="heading">
       <div class="eyebrow">Panel Administrativo</div>
       <h1>Revisión de Administración</h1>
-      <p>Navega por pestañas para resolver tickets, ver el calendario de hoy y reservas de mañana, exportar PDF con gráficos e IA o revisar logs.</p>
+      <p>Navega por pestañas para resolver tickets, ver el calendario de hoy y reservas de mañana, exportar PDF con gráficos e IA, usar el chat privado o revisar logs.</p>
     </div>
 
     <div id="aviso" class="notice" role="status" hidden></div>
@@ -25,6 +25,7 @@
       <button type="button" class="tab-btn active" data-tab="tab-tickets">Tickets y Sala Final</button>
       <button type="button" class="tab-btn" data-tab="tab-salas-reserva">Calendario y Reserva Mañana</button>
       <button type="button" class="tab-btn" data-tab="tab-reportes-ia">Reporte PDF e IA</button>
+      <button type="button" class="tab-btn" data-tab="tab-chat">Chat privado</button>
       <button type="button" class="tab-btn" data-tab="tab-logs">Logs</button>
     </nav>
 
@@ -97,6 +98,19 @@
       </div>
     </section>
 
+    <section id="tab-chat" class="panel tab-panel" hidden>
+      <h2>Chat privado</h2>
+      <div class="field">
+        <label for="chat-destinatario">Conversar con</label>
+        <select id="chat-destinatario"></select>
+      </div>
+      <div id="chat-mensajes" class="chat-box"><div class="empty">Selecciona un contacto para ver mensajes.</div></div>
+      <form id="form-chat" class="chat-form">
+        <input id="input-chat" placeholder="Escribe un mensaje privado…" autocomplete="off" required>
+        <button class="button" type="submit">Enviar</button>
+      </form>
+    </section>
+
     <section id="tab-logs" class="panel tab-panel" hidden>
       <h2>Historial de logs</h2>
       <div id="lista-logs" class="tickets"><div class="empty">Cargando logs…</div></div>
@@ -107,7 +121,8 @@
     import {
       verificarAcceso, cerrarSesion, obtenerTickets, resolverTicketAdmin,
       generarReporteIA, obtenerCalendarioSalas, reservarSalaManana,
-      obtenerReportes, obtenerLogs, obtenerUsuarios
+      obtenerReportes, obtenerLogs, obtenerUsuarios,
+      obtenerMensajesPrivados, enviarMensajePrivado
     } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
@@ -122,6 +137,7 @@
       btn.addEventListener('click', () => {
         tabBtns.forEach(b => b.classList.toggle('active', b === btn));
         tabPanels.forEach(p => { p.hidden = p.id !== btn.dataset.tab; });
+        if (btn.dataset.tab === 'tab-chat') cargarMensajes();
       });
     });
 
@@ -130,6 +146,8 @@
     const fechasCalendario = document.querySelector('#fechas-calendario');
     const selectReservaSala = document.querySelector('#reserva-sala');
     const selectReservaProfesor = document.querySelector('#reserva-profesor');
+    const selectDestinatario = document.querySelector('#chat-destinatario');
+    const cajaMensajes = document.querySelector('#chat-mensajes');
     const contenedorReportes = document.querySelector('#tabla-reportes');
     const contenedorLogs = document.querySelector('#lista-logs');
     const selectorPeriodo = document.querySelector('#selector-periodo');
@@ -209,8 +227,9 @@
       dibujar();
     }
 
-    async function cargarProfesores() {
+    async function cargarProfesoresYChat() {
       const profesorPrevio = selectReservaProfesor.value;
+      const chatPrevio = selectDestinatario.value;
       try {
         const usuarios = await obtenerUsuarios();
         const lista = Array.isArray(usuarios) ? usuarios : [];
@@ -219,9 +238,17 @@
 
         selectReservaProfesor.innerHTML = '<option value="">-- Selecciona profesor --</option>' +
           candidatos.map(u => `<option value="${esc(u.id)}">${esc(u.nombre)} (${esc(u.rut || u.rol)})</option>`).join('');
-
         if (profesorPrevio && [...selectReservaProfesor.options].some(o => o.value === profesorPrevio)) {
           selectReservaProfesor.value = profesorPrevio;
+        }
+
+        const contactosChat = lista.filter(u => Number(u.id) !== Number(sesion.id));
+        selectDestinatario.innerHTML = '<option value="">-- Selecciona contacto --</option>' +
+          contactosChat.map(u => `<option value="${esc(u.id)}">${esc(u.nombre)} (${esc(u.rol === 'admin' ? 'Coordinación' : u.rol === 'superadmin' ? 'Jefatura' : 'Docente')})</option>`).join('');
+        if (chatPrevio && [...selectDestinatario.options].some(o => o.value === chatPrevio)) {
+          selectDestinatario.value = chatPrevio;
+        } else if (contactosChat.length) {
+          selectDestinatario.value = String(contactosChat[0].id);
         }
       } catch (e) {
         if (!selectReservaProfesor.options.length) {
@@ -229,6 +256,60 @@
         }
       }
     }
+
+    async function cargarMensajes() {
+      const otroId = selectDestinatario.value;
+      if (!otroId) {
+        cajaMensajes.innerHTML = '<div class="empty">Selecciona un contacto para ver mensajes.</div>';
+        return;
+      }
+      try {
+        const msgs = await obtenerMensajesPrivados(sesion.id, otroId);
+        const lista = Array.isArray(msgs) ? msgs : [];
+        if (!lista.length) {
+          cajaMensajes.innerHTML = '<div class="empty">Aún no hay mensajes en esta conversación.</div>';
+          return;
+        }
+        cajaMensajes.innerHTML = lista.map(m => {
+          const esPropio = Number(m.remitente_id) === Number(sesion.id);
+          const hora = m.fecha_envio ? new Date(m.fecha_envio).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : '';
+          return `
+            <div class="chat-msg ${esPropio ? 'propio' : ''}">
+              <div>${esc(m.mensaje)}</div>
+              <div class="chat-meta">${esPropio ? 'Tú' : esc(m.remitente?.nombre || `Usuario #${m.remitente_id}`)} · ${esc(hora)}</div>
+            </div>
+          `;
+        }).join('');
+        cajaMensajes.scrollTop = cajaMensajes.scrollHeight;
+      } catch (e) {
+        cajaMensajes.innerHTML = `<div class="empty">Error al cargar chat: ${esc(e.message)}</div>`;
+      }
+    }
+
+    selectDestinatario.addEventListener('change', cargarMensajes);
+
+    document.querySelector('#form-chat').addEventListener('submit', async e => {
+      e.preventDefault();
+      const destId = selectDestinatario.value;
+      const input = document.querySelector('#input-chat');
+      const texto = input.value.trim();
+      if (!destId || !texto) return;
+      input.disabled = true;
+      try {
+        await enviarMensajePrivado({
+          remitente_id: sesion.id,
+          destinatario_id: Number(destId),
+          mensaje: texto
+        });
+        input.value = '';
+        await cargarMensajes();
+      } catch (err) {
+        avisoTexto(err.message || 'No se pudo enviar el mensaje.', 'error');
+      } finally {
+        input.disabled = false;
+        input.focus();
+      }
+    });
 
     async function cargarCalendario() {
       const salaPrevia = selectReservaSala.value;
@@ -650,7 +731,8 @@
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
         }
       });
-      await Promise.all([cargarProfesores(), cargarCalendario(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
+      await Promise.all([cargarProfesoresYChat(), cargarCalendario(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
+      await cargarMensajes();
       (await obtenerTickets()).forEach(guardar);
       dibujar();
     } catch (error) {

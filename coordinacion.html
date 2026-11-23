@@ -12,12 +12,13 @@
     <button class="button secondary" id="btn-salir" style="padding:4px 10px;font-size:12px;">Salir</button>
   </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Bandeja de entrada</div><h1>Solicitudes de sala</h1><p>Revisa los tickets, deriva a Administración y consulta el calendario de hoy y mañana.</p></div>
+    <div class="heading"><div class="eyebrow">Bandeja de entrada</div><h1>Solicitudes de sala</h1><p>Revisa los tickets, deriva a Administración, consulta el calendario y usa el chat privado.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
 
     <nav class="tabs" role="tablist" aria-label="Secciones Coordinación">
       <button type="button" class="tab-btn active" data-tab="tab-tickets">Tickets</button>
       <button type="button" class="tab-btn" data-tab="tab-calendario">Calendario Hoy / Mañana</button>
+      <button type="button" class="tab-btn" data-tab="tab-chat">Chat privado</button>
     </nav>
 
     <section id="tab-tickets" class="tab-panel">
@@ -35,10 +36,26 @@
       </div>
       <div id="calendario-salas" class="cal-grid"><div class="empty">Cargando calendario…</div></div>
     </section>
+
+    <section id="tab-chat" class="panel tab-panel" hidden>
+      <h2>Chat privado</h2>
+      <div class="field">
+        <label for="chat-destinatario">Conversar con</label>
+        <select id="chat-destinatario"></select>
+      </div>
+      <div id="chat-mensajes" class="chat-box"><div class="empty">Selecciona un contacto para ver mensajes.</div></div>
+      <form id="form-chat" class="chat-form">
+        <input id="input-chat" placeholder="Escribe un mensaje privado…" autocomplete="off" required>
+        <button class="button" type="submit">Enviar</button>
+      </form>
+    </section>
   </main>
 
   <script type="module">
-    import { verificarAcceso, cerrarSesion, obtenerTickets, derivarTicket, obtenerCalendarioSalas } from './js/supabase-ajax.js';
+    import {
+      verificarAcceso, cerrarSesion, obtenerTickets, derivarTicket,
+      obtenerCalendarioSalas, obtenerUsuarios, obtenerMensajesPrivados, enviarMensajePrivado
+    } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
     const sesion = verificarAcceso('admin');
@@ -52,12 +69,15 @@
       btn.addEventListener('click', () => {
         tabBtns.forEach(b => b.classList.toggle('active', b === btn));
         tabPanels.forEach(p => { p.hidden = p.id !== btn.dataset.tab; });
+        if (btn.dataset.tab === 'tab-chat') cargarMensajes();
       });
     });
 
     const bandeja = document.querySelector('#bandeja-coordinacion');
     const contenedorCalendario = document.querySelector('#calendario-salas');
     const fechasCalendario = document.querySelector('#fechas-calendario');
+    const selectDestinatario = document.querySelector('#chat-destinatario');
+    const cajaMensajes = document.querySelector('#chat-mensajes');
     const aviso = document.querySelector('#aviso');
     const conexion = document.querySelector('#conexion');
     const tickets = new Map();
@@ -76,6 +96,77 @@
     }
 
     function guardar(t) { tickets.set(String(t.id), t); dibujar(); }
+
+    async function cargarContactosChat() {
+      const previo = selectDestinatario.value;
+      try {
+        const usuarios = await obtenerUsuarios();
+        const contactos = (Array.isArray(usuarios) ? usuarios : []).filter(u => Number(u.id) !== Number(sesion.id));
+        selectDestinatario.innerHTML = '<option value="">-- Selecciona contacto --</option>' +
+          contactos.map(u => `<option value="${esc(u.id)}">${esc(u.nombre)} (${esc(u.rol === 'admin' ? 'Coordinación' : u.rol === 'superadmin' ? 'Jefatura' : 'Docente')})</option>`).join('');
+        if (previo && [...selectDestinatario.options].some(o => o.value === previo)) {
+          selectDestinatario.value = previo;
+        } else if (contactos.length) {
+          selectDestinatario.value = String(contactos[0].id);
+        }
+      } catch (e) {
+        selectDestinatario.innerHTML = '<option value="">Error cargando contactos</option>';
+      }
+    }
+
+    async function cargarMensajes() {
+      const otroId = selectDestinatario.value;
+      if (!otroId) {
+        cajaMensajes.innerHTML = '<div class="empty">Selecciona un contacto para ver mensajes.</div>';
+        return;
+      }
+      try {
+        const msgs = await obtenerMensajesPrivados(sesion.id, otroId);
+        const lista = Array.isArray(msgs) ? msgs : [];
+        if (!lista.length) {
+          cajaMensajes.innerHTML = '<div class="empty">Aún no hay mensajes en esta conversación.</div>';
+          return;
+        }
+        cajaMensajes.innerHTML = lista.map(m => {
+          const esPropio = Number(m.remitente_id) === Number(sesion.id);
+          const hora = m.fecha_envio ? new Date(m.fecha_envio).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : '';
+          return `
+            <div class="chat-msg ${esPropio ? 'propio' : ''}">
+              <div>${esc(m.mensaje)}</div>
+              <div class="chat-meta">${esPropio ? 'Tú' : esc(m.remitente?.nombre || `Usuario #${m.remitente_id}`)} · ${esc(hora)}</div>
+            </div>
+          `;
+        }).join('');
+        cajaMensajes.scrollTop = cajaMensajes.scrollHeight;
+      } catch (e) {
+        cajaMensajes.innerHTML = `<div class="empty">Error al cargar chat: ${esc(e.message)}</div>`;
+      }
+    }
+
+    selectDestinatario.addEventListener('change', cargarMensajes);
+
+    document.querySelector('#form-chat').addEventListener('submit', async e => {
+      e.preventDefault();
+      const destId = selectDestinatario.value;
+      const input = document.querySelector('#input-chat');
+      const texto = input.value.trim();
+      if (!destId || !texto) return;
+      input.disabled = true;
+      try {
+        await enviarMensajePrivado({
+          remitente_id: sesion.id,
+          destinatario_id: Number(destId),
+          mensaje: texto
+        });
+        input.value = '';
+        await cargarMensajes();
+      } catch (err) {
+        avisoTexto(err.message || 'No se pudo enviar el mensaje.', 'error');
+      } finally {
+        input.disabled = false;
+        input.focus();
+      }
+    });
 
     async function cargarCalendario() {
       try {
@@ -138,7 +229,8 @@
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
         }
       });
-      await cargarCalendario();
+      await Promise.all([cargarCalendario(), cargarContactosChat()]);
+      await cargarMensajes();
       (await obtenerTickets()).forEach(guardar);
       if (!tickets.size) dibujar();
     } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los tickets.</div>'; avisoTexto(error.message, 'error'); }

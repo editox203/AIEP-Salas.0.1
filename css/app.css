@@ -290,6 +290,64 @@ body {
   color: #1e428a;
 }
 
+/* Chat privado */
+.chat-box {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px;
+  max-height: 340px;
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.chat-msg {
+  max-width: 82%;
+  padding: 10px 13px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  background: var(--white);
+  border: 1px solid var(--line);
+}
+
+.chat-msg.propio {
+  justify-self: end;
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+
+.chat-meta {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 4px;
+}
+
+.chat-form {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+}
+
+.chat-form input {
+  flex: 1;
+  padding: 11px 13px;
+  border: 1px solid #d9deea;
+  border-radius: 9px;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  outline: none;
+}
+
+.chat-form input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px #2857d91a;
+}
+
 .ticket {
   padding: 17px 18px;
 }
@@ -461,5 +519,9 @@ body {
   }
   .role {
     font-size: 11px;
+  }
+  .chat-form {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

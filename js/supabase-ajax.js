@@ -56,6 +56,20 @@ export function obtenerUsuarios() {
   return llamarAPI('usuarios');
 }
 
+export function obtenerMensajesPrivados(usuarioId, otroUsuarioId = '') {
+  const otro = otroUsuarioId ? `&otro_usuario_id=${encodeURIComponent(otroUsuarioId)}` : '';
+  return llamarAPI('mensajes_privados', {
+    params: `&usuario_id=${encodeURIComponent(usuarioId)}${otro}`
+  });
+}
+
+export function enviarMensajePrivado(payload) {
+  return llamarAPI('enviar_mensaje_privado', {
+    method: 'POST',
+    body: payload
+  });
+}
+
 export function obtenerTickets() {
   return llamarAPI('tickets');
 }
