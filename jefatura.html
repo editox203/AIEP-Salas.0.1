@@ -4,6 +4,12 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Administración | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <style>
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .tab-btn { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    .tab-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+    .tab-panel[hidden] { display: none; }
+  </style>
 </head>
 <body>
   <header class="topbar">
@@ -14,21 +20,28 @@
   </header>
   <main class="wrap">
     <div class="heading">
-      <div class="eyebrow">Casos escalados</div>
+      <div class="eyebrow">Panel Administrativo</div>
       <h1>Revisión de Administración</h1>
-      <p>Asigna la sala final al resolver, reserva para mañana, exporta el reporte estadístico en PDF y resúmelo con IA.</p>
+      <p>Navega por pestañas para resolver tickets, reservar para mañana, exportar PDF con IA o revisar logs.</p>
     </div>
 
     <div id="aviso" class="notice" role="status" hidden></div>
 
-    <!-- Tickets derivados con elección final de sala -->
-    <section>
+    <nav class="tabs" role="tablist" aria-label="Secciones Administración">
+      <button type="button" class="tab-btn active" data-tab="tab-tickets">Tickets y Sala Final</button>
+      <button type="button" class="tab-btn" data-tab="tab-salas-reserva">Salas y Reserva Mañana</button>
+      <button type="button" class="tab-btn" data-tab="tab-reportes-ia">Reporte PDF e IA</button>
+      <button type="button" class="tab-btn" data-tab="tab-logs">Logs</button>
+    </nav>
+
+    <!-- Pestaña 1: Tickets derivados con elección final de sala -->
+    <section id="tab-tickets" class="tab-panel">
       <h2 class="section-title">Tickets derivados</h2>
       <div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div>
     </section>
 
-    <!-- Salas disponibles + Reserva para el día siguiente -->
-    <section class="panel" style="margin-top: 24px;">
+    <!-- Pestaña 2: Salas disponibles + Reserva para el día siguiente -->
+    <section id="tab-salas-reserva" class="panel tab-panel" hidden>
       <h2>Salas disponibles y reserva para el día siguiente</h2>
       <form id="form-reserva-manana" style="margin-bottom: 16px;">
         <div class="field">
@@ -52,8 +65,8 @@
       <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
     </section>
 
-    <!-- Reportes + Generación de PDF Estadístico + Resumen con IA -->
-    <section class="panel" style="margin-top: 24px;">
+    <!-- Pestaña 3: Reporte estadístico PDF + Resumen con IA -->
+    <section id="tab-reportes-ia" class="panel tab-panel" hidden>
       <h2>Reporte estadístico (PDF desde DB) y Asistente IA</h2>
       <div class="field">
         <label for="selector-periodo">Periodo del reporte</label>
@@ -81,8 +94,8 @@
       </div>
     </section>
 
-    <!-- Logs de auditoría -->
-    <section class="panel" style="margin-top: 24px;">
+    <!-- Pestaña 4: Logs de auditoría -->
+    <section id="tab-logs" class="panel tab-panel" hidden>
       <h2>Historial de logs</h2>
       <div id="lista-logs" class="tickets"><div class="empty">Cargando logs…</div></div>
     </section>
@@ -101,6 +114,15 @@
 
     document.querySelector('#btn-salir').addEventListener('click', cerrarSesion);
 
+    const tabBtns = [...document.querySelectorAll('.tab-btn')];
+    const tabPanels = [...document.querySelectorAll('.tab-panel')];
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+        tabPanels.forEach(p => { p.hidden = p.id !== btn.dataset.tab; });
+      });
+    });
+
     const bandeja = document.querySelector('#bandeja-jefatura');
     const contenedorSalas = document.querySelector('#salas-disponibles');
     const selectReservaSala = document.querySelector('#reserva-sala');
@@ -115,7 +137,6 @@
     let salasCache = [];
     let reportesCache = [];
     let logsCache = [];
-    let ultimoResumenEstadistico = '';
 
     const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const etiquetas = { pendiente_administracion: 'Pendiente de decisión', aprobado: 'Aprobado', rechazado: 'Rechazado' };
@@ -172,11 +193,10 @@
       dibujar();
     }
 
-    async function cargarSalasDisponibles() {
+    async function cargarSalas() {
       try {
         const salas = await obtenerSalasDisponibles();
         salasCache = Array.isArray(salas) ? salas : [];
-
         const disponibles = salasCache.filter(s => s.disponible);
         selectReservaSala.innerHTML = '<option value="">-- Selecciona sala disponible --</option>' +
           (disponibles.length ? disponibles : salasCache)
@@ -214,26 +234,18 @@
     document.querySelector('#form-reserva-manana').addEventListener('submit', async e => {
       e.preventDefault();
       const salaId = selectReservaSala.value;
-      const horaInicio = document.querySelector('#reserva-inicio').value;
-      const horaFin = document.querySelector('#reserva-fin').value;
-      const motivo = document.querySelector('#reserva-motivo').value.trim();
-
-      if (!salaId) {
-        avisoTexto('Selecciona una sala para reservar mañana.', 'error');
-        return;
-      }
-
+      if (!salaId) return avisoTexto('Selecciona una sala para reservar mañana.', 'error');
       try {
         const res = await reservarSalaManana({
           sala_id: salaId,
           usuario_id: sesion.id,
-          hora_inicio: horaInicio,
-          hora_fin: horaFin,
-          motivo
+          hora_inicio: document.querySelector('#reserva-inicio').value,
+          hora_fin: document.querySelector('#reserva-fin').value,
+          motivo: document.querySelector('#reserva-motivo').value.trim()
         });
         avisoTexto(`Reserva creada para el día siguiente (${res.fecha}).`, 'success');
         document.querySelector('#reserva-motivo').value = '';
-        await Promise.all([cargarSalasDisponibles(), cargarLogs()]);
+        await Promise.all([cargarSalas(), cargarLogs()]);
       } catch (err) {
         avisoTexto(err.message || 'No se pudo crear la reserva para mañana.', 'error');
       }
@@ -292,11 +304,9 @@
       const pendientes = listaTickets.filter(t => t.estado === 'pendiente_administracion').length;
       const aprobados = listaTickets.filter(t => t.estado === 'aprobado').length;
       const rechazados = listaTickets.filter(t => t.estado === 'rechazado').length;
-
       const totalSalas = salasCache.length;
       const salasLibres = salasCache.filter(s => s.disponible).length;
       const salasOcupadas = totalSalas - salasLibres;
-
       const totalUsos = reportesCache.reduce((acc, r) => acc + Number(r.cantidad_usos || 0), 0);
       const totalHoras = reportesCache.reduce((acc, r) => acc + Number(r.horas_totales || 0), 0);
 
@@ -307,8 +317,6 @@
         `Registros de reporte (${selectorPeriodo.value}): ${reportesCache.length} | Usos acumulados: ${totalUsos} | Horas totales: ${totalHoras.toFixed(2)}`,
         `Ultimos logs: ${logsCache.slice(0, 5).map(l => `[${l.accion}] ${l.detalles || ''}`).join(' ; ')}`
       ].join('\n');
-
-      ultimoResumenEstadistico = textoPlano;
 
       return {
         periodo: selectorPeriodo.value,
@@ -321,51 +329,31 @@
     }
 
     document.querySelector('#btn-generar-pdf').addEventListener('click', () => {
-      if (!window.jspdf?.jsPDF) {
-        avisoTexto('No se cargó la librería jsPDF. Revisa la conexión a internet.', 'error');
-        return;
-      }
-
+      if (!window.jspdf?.jsPDF) return avisoTexto('No se cargó jsPDF.', 'error');
       const stats = construirDatosEstadisticos();
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF();
-
       doc.setFontSize(16);
       doc.text('Reporte Estadistico de Gestion de Salas - AIEP', 14, 18);
-
       doc.setFontSize(10);
       doc.text(`Generado: ${new Date().toLocaleString('es-CL')} | Periodo: ${stats.periodo}`, 14, 26);
-
       doc.setFontSize(12);
       doc.text('1. Indicadores Generales', 14, 38);
       doc.setFontSize(10);
-      const lineasResumen = doc.splitTextToSize(stats.resumenTexto, 180);
-      doc.text(lineasResumen, 14, 45);
-
-      let y = 45 + lineasResumen.length * 6 + 8;
+      const lineas = doc.splitTextToSize(stats.resumenTexto, 180);
+      doc.text(lineas, 14, 45);
+      let y = 45 + lineas.length * 6 + 8;
       doc.setFontSize(12);
       doc.text(`2. Detalle de Reportes (${stats.periodo})`, 14, y);
       y += 7;
       doc.setFontSize(9);
-
-      if (!reportesCache.length) {
-        doc.text('Sin filas en la tabla de reportes para este periodo.', 14, y);
-      } else {
-        for (const r of reportesCache.slice(0, 25)) {
-          if (y > 275) {
-            doc.addPage();
-            y = 20;
-          }
-          const salaLabel = r.sala?.numero_sala || r.sala_id;
-          const usuarioLabel = r.usuario?.nombre || `Usuario #${r.usuario_id}`;
-          const filaTexto = `Sala ${salaLabel} | Docente/Usuario: ${usuarioLabel} | Usos: ${r.cantidad_usos} | Horas: ${r.horas_totales}`;
-          doc.text(filaTexto, 14, y);
-          y += 6;
-        }
+      for (const r of reportesCache.slice(0, 25)) {
+        if (y > 275) { doc.addPage(); y = 20; }
+        doc.text(`Sala ${r.sala?.numero_sala || r.sala_id} | Usuario: ${r.usuario?.nombre || `#${r.usuario_id}`} | Usos: ${r.cantidad_usos} | Horas: ${r.horas_totales}`, 14, y);
+        y += 6;
       }
-
       doc.save(`reporte-estadistico-salas-${stats.periodo}.pdf`);
-      avisoTexto('PDF estadístico generado y descargado desde los datos de la DB.', 'success');
+      avisoTexto('PDF estadístico generado y descargado.', 'success');
     });
 
     async function pedirResumenIA(preguntaPersonalizada) {
@@ -373,10 +361,8 @@
       const cajaRespuesta = document.querySelector('#respuesta-ia');
       cajaRespuesta.hidden = false;
       cajaRespuesta.textContent = 'Analizando estadísticas y resumiendo con IA NVIDIA...';
-
       try {
-        const respuesta = await generarReporteIA(preguntaPersonalizada, stats);
-        cajaRespuesta.textContent = respuesta;
+        cajaRespuesta.textContent = await generarReporteIA(preguntaPersonalizada, stats);
       } catch (err) {
         cajaRespuesta.textContent = 'Error al consultar la IA: ' + err.message;
       }
@@ -384,17 +370,12 @@
 
     document.querySelector('#btn-resumir-pdf-ia').addEventListener('click', () => {
       const stats = construirDatosEstadisticos();
-      pedirResumenIA(
-        `Genera un resumen ejecutivo claro de este reporte estadístico (${stats.periodo}):\n${stats.resumenTexto}`
-      );
+      pedirResumenIA(`Genera un resumen ejecutivo claro de este reporte estadístico (${stats.periodo}):\n${stats.resumenTexto}`);
     });
 
     document.querySelector('#btn-consultar-ia').addEventListener('click', () => {
       const pregunta = document.querySelector('#input-ia').value.trim();
-      if (!pregunta) {
-        avisoTexto('Escribe una pregunta o instrucción para la IA.', 'error');
-        return;
-      }
+      if (!pregunta) return avisoTexto('Escribe una pregunta o instrucción para la IA.', 'error');
       pedirResumenIA(pregunta);
     });
 
@@ -403,22 +384,20 @@
     bandeja.addEventListener('click', async e => {
       const boton = e.target.closest('[data-resolver]');
       if (!boton) return;
-
       const idTicket = boton.dataset.id;
       const decision = boton.dataset.resolver;
       const selectSala = document.querySelector(`#sala-final-${CSS.escape(idTicket)}`);
       const salaFinalId = decision === 'aprobado' ? (selectSala?.value || null) : null;
 
       if (decision === 'aprobado' && !salaFinalId) {
-        avisoTexto('Debes elegir la sala final antes de aprobar el ticket.', 'error');
-        return;
+        return avisoTexto('Debes elegir la sala final antes de aprobar el ticket.', 'error');
       }
 
       const mensaje = window.prompt('Mensaje o resolución para el docente (opcional):') || '';
       try {
         await resolverTicketAdmin(idTicket, sesion.id, salaFinalId, mensaje, decision);
         avisoTexto(`Ticket ${decision}.`, 'success');
-        await Promise.all([cargarSalasDisponibles(), cargarLogs(), cargarReportes(selectorPeriodo.value)]);
+        await Promise.all([cargarSalas(), cargarLogs(), cargarReportes(selectorPeriodo.value)]);
       } catch (error) {
         avisoTexto(error.message || 'No se pudo guardar la decisión.', 'error');
         dibujar();
@@ -428,16 +407,13 @@
     try {
       escucharTiempoReal({
         alCrearTicket: guardar,
-        alActualizarTicket: async t => {
-          guardar(t);
-          await Promise.all([cargarLogs(), cargarSalasDisponibles()]);
-        },
+        alActualizarTicket: async t => { guardar(t); await Promise.all([cargarLogs(), cargarSalas()]); },
         alEstadoConexion: estado => {
           conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
         }
       });
-      await Promise.all([cargarSalasDisponibles(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
+      await Promise.all([cargarSalas(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
       (await obtenerTickets()).forEach(guardar);
       dibujar();
     } catch (error) {

@@ -3,6 +3,12 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Coordinación | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
+  <style>
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .tab-btn { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    .tab-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+    .tab-panel[hidden] { display: none; }
+  </style>
 </head>
 <body>
   <header class="topbar">
@@ -15,22 +21,39 @@
     <div class="heading"><div class="eyebrow">Bandeja de entrada</div><h1>Solicitudes de sala</h1><p>Revisa los tickets y deriva a Administración los casos necesarios.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
 
-    <section><h2 class="section-title">Todos los tickets</h2><div id="bandeja-coordinacion" class="tickets"><div class="empty">Cargando tickets…</div></div></section>
+    <nav class="tabs" role="tablist" aria-label="Secciones Coordinación">
+      <button type="button" class="tab-btn active" data-tab="tab-tickets">Tickets</button>
+      <button type="button" class="tab-btn" data-tab="tab-salas">Salas disponibles</button>
+    </nav>
 
-    <section class="panel" style="margin-top: 24px;">
+    <section id="tab-tickets" class="tab-panel">
+      <h2 class="section-title">Todos los tickets</h2>
+      <div id="bandeja-coordinacion" class="tickets"><div class="empty">Cargando tickets…</div></div>
+    </section>
+
+    <section id="tab-salas" class="panel tab-panel" hidden>
       <h2>Salas disponibles</h2>
       <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
     </section>
   </main>
 
   <script type="module">
-    import { verificarAcceso, cerrarSesion, obtenerTickets, derivarTicket } from './js/supabase-ajax.js';
+    import { verificarAcceso, cerrarSesion, obtenerTickets, derivarTicket, obtenerSalasDisponibles } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
     const sesion = verificarAcceso('admin');
     if (!sesion) throw new Error('Acceso no autorizado');
 
     document.querySelector('#btn-salir').addEventListener('click', cerrarSesion);
+
+    const tabBtns = [...document.querySelectorAll('.tab-btn')];
+    const tabPanels = [...document.querySelectorAll('.tab-panel')];
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+        tabPanels.forEach(p => { p.hidden = p.id !== btn.dataset.tab; });
+      });
+    });
 
     const bandeja = document.querySelector('#bandeja-coordinacion');
     const contenedorSalas = document.querySelector('#salas-disponibles');
@@ -53,11 +76,9 @@
 
     function guardar(t) { tickets.set(String(t.id), t); dibujar(); }
 
-    async function cargarSalasDisponibles() {
+    async function cargarSalas() {
       try {
-        const res = await fetch('/api/proxy?accion=salas_disponibles');
-        const salas = await res.json();
-        if (!res.ok) throw new Error(salas.error || 'Error al cargar salas');
+        const salas = await obtenerSalasDisponibles();
         contenedorSalas.innerHTML = (salas || []).map(s => `
           <article class="ticket">
             <div class="ticket-top">
@@ -92,7 +113,7 @@
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
         }
       });
-      await cargarSalasDisponibles();
+      await cargarSalas();
       (await obtenerTickets()).forEach(guardar);
       if (!tickets.size) dibujar();
     } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los tickets.</div>'; avisoTexto(error.message, 'error'); }

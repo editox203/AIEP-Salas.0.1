@@ -3,6 +3,12 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Docente | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
+  <style>
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .tab-btn { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    .tab-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+    .tab-panel[hidden] { display: none; }
+  </style>
 </head>
 <body>
   <header class="topbar">
@@ -11,10 +17,17 @@
     <button class="button secondary" id="btn-salir" style="padding:4px 10px;font-size:12px;">Salir</button>
   </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Nueva solicitud</div><h1 id="titulo-docente">Hola, Docente</h1><p>Informa un problema de sala y revisa aquí el avance de tus solicitudes.</p></div>
+    <div class="heading"><div class="eyebrow">Portal Docente</div><h1 id="titulo-docente">Hola, Docente</h1><p>Gestiona tus solicitudes y consulta la disponibilidad de salas.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
 
-    <section class="panel">
+    <nav class="tabs" role="tablist" aria-label="Secciones Docente">
+      <button type="button" class="tab-btn active" data-tab="tab-solicitud">Nueva solicitud</button>
+      <button type="button" class="tab-btn" data-tab="tab-salas">Salas disponibles</button>
+      <button type="button" class="tab-btn" data-tab="tab-mis-tickets">Mis solicitudes</button>
+    </nav>
+
+    <!-- Pestaña 1: Nueva solicitud -->
+    <section id="tab-solicitud" class="panel tab-panel">
       <h2>Crear ticket</h2>
       <form id="form-docente">
         <div class="field">
@@ -26,33 +39,29 @@
         <div class="field"><label for="sala">Sala Actual (ID o código, ej: I007)</label><input id="sala" name="sala_actual_id" placeholder="Ej: I007 o ID de la sala" required></div>
         <div class="field"><label for="sala-preferida">Sala Preferida (ID o código, opcional)</label><input id="sala-preferida" name="sala_preferida_id" placeholder="Ej: I008 o deja vacío"></div>
         <div class="field"><label for="bloque">Bloque horario</label><input id="bloque" name="bloque" placeholder="Ej: 3" required></div>
-        <div class="field">
-          <label for="fecha-necesitada">Fecha</label>
-          <input id="fecha-necesitada" name="fecha_necesitada" type="date" required>
-        </div>
-        <div class="field">
-          <label for="hora-inicio">Hora inicio</label>
-          <input id="hora-inicio" name="hora_inicio" type="time" step="1" required>
-        </div>
-        <div class="field">
-          <label for="hora-fin">Hora fin</label>
-          <input id="hora-fin" name="hora_fin" type="time" step="1" required>
-        </div>
+        <div class="field"><label for="fecha-necesitada">Fecha</label><input id="fecha-necesitada" name="fecha_necesitada" type="date" required></div>
+        <div class="field"><label for="hora-inicio">Hora inicio</label><input id="hora-inicio" name="hora_inicio" type="time" step="1" required></div>
+        <div class="field"><label for="hora-fin">Hora fin</label><input id="hora-fin" name="hora_fin" type="time" step="1" required></div>
         <div class="field"><label for="motivo">Motivo / Descripción</label><textarea id="motivo" name="motivo" placeholder="Describe brevemente qué ocurre…" required></textarea></div>
         <button class="button" id="enviar" type="submit">Enviar a Coordinación</button>
       </form>
     </section>
 
-    <section class="panel" style="margin-top: 20px;">
+    <!-- Pestaña 2: Salas disponibles -->
+    <section id="tab-salas" class="panel tab-panel" hidden>
       <h2>Salas disponibles</h2>
       <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
     </section>
 
-    <section><h2 class="section-title">Mis solicitudes</h2><div id="estado-tickets" class="tickets"><div class="empty">Cargando solicitudes…</div></div></section>
+    <!-- Pestaña 3: Mis solicitudes -->
+    <section id="tab-mis-tickets" class="panel tab-panel" hidden>
+      <h2 class="section-title">Mis solicitudes</h2>
+      <div id="estado-tickets" class="tickets"><div class="empty">Cargando solicitudes…</div></div>
+    </section>
   </main>
 
   <script type="module">
-    import { verificarAcceso, cerrarSesion, crearTicket, obtenerTickets } from './js/supabase-ajax.js';
+    import { verificarAcceso, cerrarSesion, crearTicket, obtenerTickets, obtenerHorariosProfesor, obtenerSalasDisponibles } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
     const sesion = verificarAcceso('user');
@@ -60,6 +69,16 @@
 
     document.querySelector('#titulo-docente').textContent = `Hola, ${sesion.nombre}`;
     document.querySelector('#btn-salir').addEventListener('click', cerrarSesion);
+
+    // Cambio de pestañas
+    const tabBtns = [...document.querySelectorAll('.tab-btn')];
+    const tabPanels = [...document.querySelectorAll('.tab-panel')];
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+        tabPanels.forEach(p => { p.hidden = p.id !== btn.dataset.tab; });
+      });
+    });
 
     const contenedor = document.querySelector('#estado-tickets');
     const contenedorSalas = document.querySelector('#salas-disponibles');
@@ -85,11 +104,9 @@
       contenedor.innerHTML = [...misTickets.values()].sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion)).map(tarjeta).join('') || '<div class="empty">Aún no tienes solicitudes.</div>';
     }
 
-    async function cargarHorariosProfesor() {
+    async function cargarHorarios() {
       try {
-        const res = await fetch(`/api/proxy?accion=horarios_profesor&usuario_id=${encodeURIComponent(sesion.id)}`);
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Error al cargar horarios');
+        const data = await obtenerHorariosProfesor(sesion.id);
         horariosDocente = Array.isArray(data) ? data : [];
         selectHorario.innerHTML = '<option value="">-- Selecciona un horario asignado --</option>' +
           horariosDocente.map((h, idx) => `<option value="${idx}">${esc(h.numero_sala || h.sala_id)} · ${esc(h.fecha || '')} (${esc(h.hora_inicio || '')} - ${esc(h.hora_fin || '')})</option>`).join('');
@@ -110,19 +127,14 @@
       }
     });
 
-    async function cargarSalasDisponibles() {
+    async function cargarSalas() {
       try {
         const fechaSel = document.querySelector('#fecha-necesitada').value;
-        const query = fechaSel ? `&fecha=${encodeURIComponent(fechaSel)}` : '';
-        const res = await fetch(`/api/proxy?accion=salas_disponibles${query}`);
-        const salas = await res.json();
-        if (!res.ok) throw new Error(salas.error || 'Error al cargar salas');
-
+        const salas = await obtenerSalasDisponibles({ fecha: fechaSel });
         if (!Array.isArray(salas) || !salas.length) {
           contenedorSalas.innerHTML = '<div class="empty">No hay salas registradas.</div>';
           return;
         }
-
         contenedorSalas.innerHTML = salas.map(s => `
           <article class="ticket">
             <div class="ticket-top">
@@ -146,10 +158,11 @@
       const btn = e.target.closest('[data-usar-sala]');
       if (!btn) return;
       document.querySelector('#sala-preferida').value = btn.dataset.usarSala;
-      mostrarAviso(`Sala #${btn.dataset.usarSala} seleccionada como preferida.`, 'success');
+      document.querySelector('[data-tab="tab-solicitud"]').click();
+      mostrarAviso(`Sala #${btn.dataset.usarSala} asignada como preferida.`, 'success');
     });
 
-    document.querySelector('#fecha-necesitada').addEventListener('change', cargarSalasDisponibles);
+    document.querySelector('#fecha-necesitada').addEventListener('change', cargarSalas);
 
     form.addEventListener('submit', async e => {
       e.preventDefault(); boton.disabled = true; mostrarAviso('Enviando solicitud…');
@@ -168,17 +181,14 @@
         if (creado) guardarTicket(creado);
         form.reset();
         mostrarAviso('Ticket enviado correctamente.', 'success');
-        await cargarSalasDisponibles();
+        await cargarSalas();
       } catch (error) { mostrarAviso(error.message || 'No se pudo enviar el ticket.', 'error'); }
       finally { boton.disabled = false; }
     });
 
     try {
-      escucharTiempoReal({
-        alCrearTicket: guardarTicket,
-        alActualizarTicket: guardarTicket
-      });
-      await Promise.all([cargarHorariosProfesor(), cargarSalasDisponibles()]);
+      escucharTiempoReal({ alCrearTicket: guardarTicket, alActualizarTicket: guardarTicket });
+      await Promise.all([cargarHorarios(), cargarSalas()]);
       const lista = await obtenerTickets();
       lista.filter(t => t.usuario_id === sesion.id).forEach(guardarTicket);
       if (!misTickets.size) contenedor.innerHTML = '<div class="empty">Aún no tienes solicitudes.</div>';
