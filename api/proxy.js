@@ -58,7 +58,7 @@ export default async function handler(req, res) {
           usuario_id: payload.usuario_id,
           accion: 'CREAR_TICKET',
           ticket_id: ticket.id,
-          detalles: `Bloque ${payload.bloque}: ${payload.motivo}`
+          detalles: payload.bloque ? `Bloque ${payload.bloque}: ${payload.motivo}` : payload.motivo
         });
         return res.status(200).json(ticket);
       }
@@ -77,18 +77,35 @@ export default async function handler(req, res) {
 
       case 'resolver_ticket': {
         const { id, admin_id, sala_final_id, mensaje_admin, accion: accionTicket } = req.body || {};
+        const esAprobado = accionTicket === 'aprobado';
+
+        let salaAsignada = sala_final_id || null;
+
+        if (esAprobado && !salaAsignada) {
+          const rows = await llamarSupabase(`/tickets_reasignacion?id=eq.${id}&select=sala_preferida_id,sala_actual_id`);
+          const actualTicket = Array.isArray(rows) ? rows[0] : null;
+          salaAsignada = actualTicket?.sala_preferida_id ?? actualTicket?.sala_actual_id ?? null;
+        }
+
+        if (esAprobado && !salaAsignada) {
+          return res.status(400).json({ error: 'Debes seleccionar o tener una sala asignada (sala_final_id) para aprobar el ticket.' });
+        }
+
         const payload = {
           estado: accionTicket,
-          sala_final_id: accionTicket === 'aprobado' ? sala_final_id : null,
-          mensaje_admin
+          sala_final_id: esAprobado ? salaAsignada : null,
+          mensaje_admin: mensaje_admin || (esAprobado ? 'Aprobado en administración' : 'Rechazado en administración')
         };
+
         const resPatch = await llamarSupabase(`/tickets_reasignacion?id=eq.${id}`, 'PATCH', payload);
+
         await llamarSupabase('/historial_logs', 'POST', {
           usuario_id: admin_id,
-          accion: accionTicket === 'aprobado' ? 'APROBAR_TICKET' : 'RECHAZAR_TICKET',
+          accion: esAprobado ? 'APROBAR_TICKET' : 'RECHAZAR_TICKET',
           ticket_id: id,
-          detalles: mensaje_admin
+          detalles: payload.mensaje_admin
         });
+
         return res.status(200).json(Array.isArray(resPatch) ? resPatch[0] : resPatch);
       }
 
