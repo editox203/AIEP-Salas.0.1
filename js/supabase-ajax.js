@@ -71,17 +71,48 @@ export function resolverTicketAdmin(id, admin_id, sala_final_id, mensaje_admin, 
   });
 }
 
+export function obtenerHorariosProfesor(usuarioId) {
+  return llamarAPI('horarios_profesor', {
+    params: `&usuario_id=${encodeURIComponent(usuarioId)}`
+  });
+}
+
+export function obtenerSalasDisponibles({ fecha = '', sede = '' } = {}) {
+  const f = fecha ? `&fecha=${encodeURIComponent(fecha)}` : '';
+  const s = sede ? `&sede=${encodeURIComponent(sede)}` : '';
+  return llamarAPI('salas_disponibles', { params: `${f}${s}` });
+}
+
+export function obtenerLogs(limite = 30) {
+  return llamarAPI('logs', { params: `&limite=${encodeURIComponent(limite)}` });
+}
+
+export function obtenerReportes(periodo = 'diario') {
+  return llamarAPI('reportes', { params: `&periodo=${encodeURIComponent(periodo)}` });
+}
+
 export async function generarReporteIA(pregunta, estadisticas) {
+  if (BACKEND_IA_URL) {
+    try {
+      const res = await fetch(BACKEND_IA_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pregunta, estadisticas })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.respuesta) return data.respuesta;
+      }
+    } catch (_) {}
+  }
+
   try {
-    const res = await fetch(BACKEND_IA_URL, {
+    const dataProxy = await llamarAPI('chat_ia', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pregunta, estadisticas })
+      body: { pregunta, estadisticas }
     });
-    if (res.ok) {
-      const data = await res.json();
-      return data.respuesta;
-    }
-  } catch (_) {}
-  return 'No se pudo conectar con el servicio de IA de NVIDIA.';
+    return dataProxy?.respuesta || 'Sin respuesta generada.';
+  } catch (err) {
+    return `No se pudo conectar con el servicio de IA de NVIDIA: ${err.message}`;
+  }
 }
