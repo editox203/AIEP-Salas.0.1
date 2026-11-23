@@ -290,62 +290,195 @@ body {
   color: #1e428a;
 }
 
-/* Chat privado */
-.chat-box {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #f8fafc;
-  padding: 14px;
-  max-height: 340px;
-  overflow-y: auto;
+/* Chat privado estilo WhatsApp (lista por persona + conversación) */
+.wsp-layout {
   display: grid;
+  grid-template-columns: 265px 1fr;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--white);
+  min-height: 430px;
+}
+
+.wsp-sidebar {
+  border-right: 1px solid var(--line);
+  background: #f9fbfe;
+  display: flex;
+  flex-direction: column;
+}
+
+.wsp-search {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--white);
+}
+
+.wsp-search input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #d9deea;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.wsp-search input:focus {
+  border-color: var(--blue);
+}
+
+.wsp-contacts {
+  overflow-y: auto;
+  max-height: 380px;
+  display: flex;
+  flex-direction: column;
+}
+
+.wsp-contact {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px solid #eef2f7;
+  background: transparent;
+  padding: 11px 12px;
+  display: flex;
+  align-items: center;
   gap: 10px;
-  margin-bottom: 14px;
+  text-align: left;
+  cursor: pointer;
+  color: #172033;
+  transition: background 0.12s;
+}
+
+.wsp-contact:hover {
+  background: #eef3fc;
+}
+
+.wsp-contact.active {
+  background: #e2ecff;
+}
+
+.wsp-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
+  font: 700 12px Manrope, sans-serif;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.wsp-contact.active .wsp-avatar {
+  background: var(--blue);
+}
+
+.wsp-contact-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.wsp-contact-name {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wsp-contact-role {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wsp-main {
+  display: flex;
+  flex-direction: column;
+  background: #f4f6fa;
+}
+
+.wsp-chat-header {
+  padding: 12px 16px;
+  background: var(--white);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wsp-chat-title {
+  font: 700 14px Manrope, sans-serif;
+  margin: 0;
+}
+
+.wsp-chat-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-box {
+  padding: 14px 16px;
+  flex: 1;
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .chat-msg {
-  max-width: 82%;
-  padding: 10px 13px;
+  max-width: 78%;
+  padding: 9px 12px;
   border-radius: 12px;
   font-size: 13px;
   line-height: 1.45;
   background: var(--white);
   border: 1px solid var(--line);
+  align-self: flex-start;
+  box-shadow: 0 2px 6px #17203308;
 }
 
 .chat-msg.propio {
-  justify-self: end;
+  align-self: flex-end;
   background: var(--blue);
   color: #fff;
   border-color: var(--blue);
 }
 
 .chat-meta {
-  font-size: 11px;
-  opacity: 0.75;
-  margin-top: 4px;
+  font-size: 10.5px;
+  opacity: 0.78;
+  margin-top: 3px;
+  text-align: right;
 }
 
 .chat-form {
+  padding: 10px 12px;
+  background: var(--white);
+  border-top: 1px solid var(--line);
   display: flex;
-  gap: 9px;
+  gap: 8px;
   align-items: center;
 }
 
 .chat-form input {
   flex: 1;
-  padding: 11px 13px;
+  padding: 10px 13px;
   border: 1px solid #d9deea;
-  border-radius: 9px;
+  border-radius: 999px;
   font: inherit;
   color: inherit;
-  background: #fff;
+  background: #f8fafc;
   outline: none;
 }
 
 .chat-form input:focus {
   border-color: var(--blue);
-  box-shadow: 0 0 0 3px #2857d91a;
+  background: #fff;
 }
 
 .ticket {
@@ -502,6 +635,20 @@ body {
   line-height: 1.5;
 }
 
+@media (max-width: 680px) {
+  .wsp-layout {
+    grid-template-columns: 1fr;
+  }
+  .wsp-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    max-height: 190px;
+  }
+  .wsp-contacts {
+    max-height: 130px;
+  }
+}
+
 @media (max-width: 520px) {
   .topbar {
     padding: 15px 16px;
@@ -519,9 +666,5 @@ body {
   }
   .role {
     font-size: 11px;
-  }
-  .chat-form {
-    flex-direction: column;
-    align-items: stretch;
   }
 }

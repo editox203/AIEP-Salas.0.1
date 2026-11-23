@@ -59,15 +59,32 @@
 
     <section id="tab-chat" class="panel tab-panel" hidden>
       <h2>Chat privado</h2>
-      <div class="field">
-        <label for="chat-destinatario">Conversar con</label>
-        <select id="chat-destinatario"></select>
+      <div class="wsp-layout">
+        <aside class="wsp-sidebar">
+          <div class="wsp-search">
+            <input id="buscar-contacto" type="search" placeholder="Buscar persona o rol…">
+          </div>
+          <div id="lista-contactos" class="wsp-contacts">
+            <div class="empty" style="border:0;">Cargando personas…</div>
+          </div>
+        </aside>
+        <div class="wsp-main">
+          <div class="wsp-chat-header">
+            <div class="wsp-avatar" id="chat-avatar-activo">--</div>
+            <div>
+              <h3 class="wsp-chat-title" id="chat-nombre-activo">Selecciona una persona</h3>
+              <div class="wsp-chat-sub" id="chat-rol-activo">Chat directo</div>
+            </div>
+          </div>
+          <div id="chat-mensajes" class="chat-box">
+            <div class="empty">Elige una persona en la lista para abrir el chat.</div>
+          </div>
+          <form id="form-chat" class="chat-form">
+            <input id="input-chat" placeholder="Escribe un mensaje…" autocomplete="off" required>
+            <button class="button" type="submit">Enviar</button>
+          </form>
+        </div>
       </div>
-      <div id="chat-mensajes" class="chat-box"><div class="empty">Selecciona un contacto para ver mensajes.</div></div>
-      <form id="form-chat" class="chat-form">
-        <input id="input-chat" placeholder="Escribe un mensaje privado…" autocomplete="off" required>
-        <button class="button" type="submit">Enviar</button>
-      </form>
     </section>
   </main>
 
@@ -99,15 +116,23 @@
     const contenedorCalendario = document.querySelector('#calendario-salas');
     const fechasCalendario = document.querySelector('#fechas-calendario');
     const selectHorario = document.querySelector('#horario-asignado');
-    const selectDestinatario = document.querySelector('#chat-destinatario');
+    const listaContactosEl = document.querySelector('#lista-contactos');
+    const buscarContactoEl = document.querySelector('#buscar-contacto');
+    const chatAvatarActivo = document.querySelector('#chat-avatar-activo');
+    const chatNombreActivo = document.querySelector('#chat-nombre-activo');
+    const chatRolActivo = document.querySelector('#chat-rol-activo');
     const cajaMensajes = document.querySelector('#chat-mensajes');
     const aviso = document.querySelector('#aviso');
     const form = document.querySelector('#form-docente');
     const boton = document.querySelector('#enviar');
     const misTickets = new Map();
     let horariosDocente = [];
+    let contactosCache = [];
+    let contactoActivoId = '';
 
     const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const iniciales = nombre => String(nombre || 'U').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase() || 'U';
+    const rolLegible = rol => rol === 'admin' ? 'Coordinación' : rol === 'superadmin' ? 'Jefatura / Admin' : 'Docente';
     const etiquetas = { pendiente_coordinacion: 'Abierto (Pendiente Coordinación)', pendiente_administracion: 'Derivado a Administración', aprobado: 'Aprobado', rechazado: 'Rechazado' };
 
     function mostrarAviso(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
@@ -122,34 +147,80 @@
       contenedor.innerHTML = [...misTickets.values()].sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion)).map(tarjeta).join('') || '<div class="empty">Aún no tienes solicitudes.</div>';
     }
 
+    function actualizarCabeceraChat() {
+      const persona = contactosCache.find(u => String(u.id) === String(contactoActivoId));
+      if (!persona) {
+        chatAvatarActivo.textContent = '--';
+        chatNombreActivo.textContent = 'Selecciona una persona';
+        chatRolActivo.textContent = 'Chat directo';
+        return;
+      }
+      chatAvatarActivo.textContent = iniciales(persona.nombre);
+      chatNombreActivo.textContent = persona.nombre;
+      chatRolActivo.textContent = `${rolLegible(persona.rol)}${persona.cargo ? ` · ${persona.cargo}` : ''}`;
+    }
+
+    function dibujarContactos() {
+      const filtro = buscarContactoEl.value.trim().toLowerCase();
+      const filtrados = contactosCache.filter(u => {
+        const texto = `${u.nombre || ''} ${u.cargo || ''} ${rolLegible(u.rol)}`.toLowerCase();
+        return !filtro || texto.includes(filtro);
+      });
+
+      if (!filtrados.length) {
+        listaContactosEl.innerHTML = '<div class="empty" style="border:0;">Sin coincidencias.</div>';
+        return;
+      }
+
+      listaContactosEl.innerHTML = filtrados.map(u => {
+        const activa = String(u.id) === String(contactoActivoId);
+        return `
+          <button type="button" class="wsp-contact ${activa ? 'active' : ''}" data-contacto-id="${esc(u.id)}">
+            <span class="wsp-avatar">${esc(iniciales(u.nombre))}</span>
+            <span class="wsp-contact-info">
+              <span class="wsp-contact-name">${esc(u.nombre)}</span>
+              <span class="wsp-contact-role">${esc(rolLegible(u.rol))}</span>
+            </span>
+          </button>
+        `;
+      }).join('');
+    }
+
     async function cargarContactosChat() {
-      const previo = selectDestinatario.value;
       try {
         const usuarios = await obtenerUsuarios();
-        const contactos = (Array.isArray(usuarios) ? usuarios : []).filter(u => Number(u.id) !== Number(sesion.id));
-        selectDestinatario.innerHTML = '<option value="">-- Selecciona contacto --</option>' +
-          contactos.map(u => `<option value="${esc(u.id)}">${esc(u.nombre)} (${esc(u.rol === 'admin' ? 'Coordinación' : u.rol === 'superadmin' ? 'Jefatura' : 'Docente')})</option>`).join('');
-        if (previo && [...selectDestinatario.options].some(o => o.value === previo)) {
-          selectDestinatario.value = previo;
-        } else if (contactos.length) {
-          selectDestinatario.value = String(contactos[0].id);
+        contactosCache = (Array.isArray(usuarios) ? usuarios : []).filter(u => Number(u.id) !== Number(sesion.id));
+        if (!contactoActivoId && contactosCache.length) {
+          contactoActivoId = String(contactosCache[0].id);
         }
+        dibujarContactos();
+        actualizarCabeceraChat();
       } catch (e) {
-        selectDestinatario.innerHTML = '<option value="">Error cargando contactos</option>';
+        listaContactosEl.innerHTML = `<div class="empty" style="border:0;">Error: ${esc(e.message)}</div>`;
       }
     }
 
+    buscarContactoEl.addEventListener('input', dibujarContactos);
+
+    listaContactosEl.addEventListener('click', async e => {
+      const btn = e.target.closest('[data-contacto-id]');
+      if (!btn) return;
+      contactoActivoId = String(btn.dataset.contactoId);
+      dibujarContactos();
+      actualizarCabeceraChat();
+      await cargarMensajes();
+    });
+
     async function cargarMensajes() {
-      const otroId = selectDestinatario.value;
-      if (!otroId) {
-        cajaMensajes.innerHTML = '<div class="empty">Selecciona un contacto para ver mensajes.</div>';
+      if (!contactoActivoId) {
+        cajaMensajes.innerHTML = '<div class="empty">Elige una persona en la lista para abrir el chat.</div>';
         return;
       }
       try {
-        const msgs = await obtenerMensajesPrivados(sesion.id, otroId);
+        const msgs = await obtenerMensajesPrivados(sesion.id, contactoActivoId);
         const lista = Array.isArray(msgs) ? msgs : [];
         if (!lista.length) {
-          cajaMensajes.innerHTML = '<div class="empty">Aún no hay mensajes en esta conversación.</div>';
+          cajaMensajes.innerHTML = '<div class="empty">Aún no hay mensajes con esta persona. Escribe el primero abajo.</div>';
           return;
         }
         cajaMensajes.innerHTML = lista.map(m => {
@@ -158,7 +229,7 @@
           return `
             <div class="chat-msg ${esPropio ? 'propio' : ''}">
               <div>${esc(m.mensaje)}</div>
-              <div class="chat-meta">${esPropio ? 'Tú' : esc(m.remitente?.nombre || `Usuario #${m.remitente_id}`)} · ${esc(hora)}</div>
+              <div class="chat-meta">${esPropio ? 'Tú' : esc(m.remitente?.nombre || 'Contacto')} · ${esc(hora)}</div>
             </div>
           `;
         }).join('');
@@ -168,19 +239,17 @@
       }
     }
 
-    selectDestinatario.addEventListener('change', cargarMensajes);
-
     document.querySelector('#form-chat').addEventListener('submit', async e => {
       e.preventDefault();
-      const destId = selectDestinatario.value;
+      if (!contactoActivoId) return mostrarAviso('Selecciona una persona en la lista primero.', 'error');
       const input = document.querySelector('#input-chat');
       const texto = input.value.trim();
-      if (!destId || !texto) return;
+      if (!texto) return;
       input.disabled = true;
       try {
         await enviarMensajePrivado({
           remitente_id: sesion.id,
-          destinatario_id: Number(destId),
+          destinatario_id: Number(contactoActivoId),
           mensaje: texto
         });
         input.value = '';
