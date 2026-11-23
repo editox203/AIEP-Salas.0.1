@@ -10,9 +10,13 @@ export default async function handler(req, res) {
   }
 
   const { accion } = req.query;
-  const SUPABASE_URL = process.env.SUPABASE_URL || 'https://TU-PROYECTO.supabase.co/rest/v1';
-  const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'TU_CLAVE';
+  const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+  const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
   const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
+
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return res.status(500).json({ error: 'Faltan variables de entorno SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY en Vercel.' });
+  }
 
   async function llamarSupabase(endpoint, metodo = 'GET', body = null) {
     const respuesta = await fetch(`${SUPABASE_URL}${endpoint}`, {
@@ -25,32 +29,129 @@ export default async function handler(req, res) {
       },
       body: body ? JSON.stringify(body) : undefined
     });
+
     const text = await respuesta.text();
-    const data = text ? JSON.parse(text) : null;
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = { message: text };
+    }
+
     if (!respuesta.ok) {
-      throw new Error(data?.message || data?.error || `Error HTTP ${respuesta.status}`);
+      throw new Error(data?.message || data?.error || data?.details || `Error HTTP ${respuesta.status}`);
     }
     return data;
+  }
+
+  // Convierte "I007" (numero_sala) o ID numérico al ID entero de la tabla salas
+  async function resolverSalaId(valor) {
+    if (valor === null || valor === undefined || String(valor).trim() === '') return null;
+    const str = String(valor).trim();
+    if (/^\d+$/.test(str)) return Number(str);
+
+    const filas = await llamarSupabase(`/salas?numero_sala=ilike.${encodeURIComponent(str)}&select=id`);
+    if (!Array.isArray(filas) || filas.length === 0) {
+      throw new Error(`No existe ninguna sala con código o ID "${str}".`);
+    }
+    return Number(filas[0].id);
   }
 
   try {
     switch (accion) {
       case 'login': {
         const { rut, password } = req.body || {};
-        const usuarios = await llamarSupabase(`/usuarios?rut=eq.${encodeURIComponent(rut?.trim())}&password=eq.${encodeURIComponent(password?.trim())}&select=id,nombre,rut,cargo,rol,escuela`);
+        const usuarios = await llamarSupabase(
+          `/usuarios?rut=eq.${encodeURIComponent(rut?.trim() || '')}&password=eq.${encodeURIComponent(password?.trim() || '')}&select=id,nombre,rut,cargo,rol,escuela`
+        );
         if (!usuarios || usuarios.length === 0) {
           return res.status(401).json({ error: 'RUT o contraseña incorrectos.' });
         }
         return res.status(200).json(usuarios[0]);
       }
 
+      case 'horarios_profesor': {
+        const usuarioId = req.query.usuario_id;
+        if (!usuarioId) {
+          return res.status(400).json({ error: 'Falta usuario_id.' });
+        }
+        const horarios = await llamarSupabase(
+          `/sala_diaria?usuario_id=eq.${encodeURIComponent(usuarioId)}&select=*,sala:salas!sala_id(id,numero_sala,categoria,sede)&order=fecha.asc,hora_inicio.asc`
+        );
+        const normalizados = (horarios || []).map(h => ({
+          ...h,
+          numero_sala: h.numero_sala || h.sala?.numero_sala || `Sala #${h.sala_id}`
+        }));
+        return res.status(200).json(normalizados);
+      }
+
+      case 'salas_disponibles': {
+        const { fecha, sede } = req.query;
+        let querySalas = '/salas?select=*&order=numero_sala.asc';
+        if (sede) {
+          querySalas += `&sede=eq.${encodeURIComponent(sede)}`;
+        }
+        const salas = await llamarSupabase(querySalas);
+
+        let queryOcupadas = '/sala_diaria?select=sala_id,fecha,hora_inicio,hora_fin,estado,usuario_id';
+        if (fecha) {
+          queryOcupadas += `&fecha=eq.${encodeURIComponent(fecha)}`;
+        }
+        const ocupaciones = await llamarSupabase(queryOcupadas);
+
+        const mapaOcupadas = new Map();
+        for (const oc of (ocupaciones || [])) {
+          const est = String(oc.estado ?? '').toLowerCase();
+          const noDisp = oc.estado === 1 || est === '1' || est === 'ocupada' || est === 'bloqueada';
+          if (noDisp) {
+            if (!mapaOcupadas.has(oc.sala_id)) mapaOcupadas.set(oc.sala_id, []);
+            mapaOcupadas.get(oc.sala_id).push(oc);
+          }
+        }
+
+        const resultado = (salas || []).map(s => {
+          const bloquesOcupados = mapaOcupadas.get(s.id) || [];
+          return {
+            ...s,
+            disponible: bloquesOcupados.length === 0,
+            bloques_ocupados: bloquesOcupados
+          };
+        });
+
+        return res.status(200).json(resultado);
+      }
+
       case 'tickets': {
-        const tickets = await llamarSupabase('/tickets_reasignacion?select=*,docente:usuarios!usuario_id(id,nombre,rut,escuela),sala_actual:salas!sala_actual_id(id,numero_sala,categoria),sala_preferida:salas!sala_preferida_id(id,numero_sala,categoria),sala_final:salas!sala_final_id(id,numero_sala,categoria)&order=fecha_creacion.desc');
-        return res.status(200).json(tickets);
+        const tickets = await llamarSupabase(
+          '/tickets_reasignacion?select=*,docente:usuarios!usuario_id(id,nombre,rut,escuela),sala_actual:salas!sala_actual_id(id,numero_sala,categoria),sala_preferida:salas!sala_preferida_id(id,numero_sala,categoria),sala_final:salas!sala_final_id(id,numero_sala,categoria)&order=fecha_creacion.desc'
+        );
+        return res.status(200).json(tickets || []);
       }
 
       case 'crear_ticket': {
-        const payload = { ...(req.body || {}), estado: 'pendiente_coordinacion' };
+        const body = req.body || {};
+        const salaActualId = await resolverSalaId(body.sala_actual_id ?? body.sala_actual);
+        const salaPreferidaId = await resolverSalaId(body.sala_preferida_id ?? body.sala_preferida);
+
+        if (!salaActualId) {
+          return res.status(400).json({ error: 'Debes indicar una sala actual válida (ID o código como I007).' });
+        }
+
+        const payload = {
+          usuario_id: Number(body.usuario_id),
+          sala_actual_id: salaActualId,
+          sala_preferida_id: salaPreferidaId,
+          motivo: String(body.motivo || '').trim(),
+          fecha_necesitada: body.fecha_necesitada || new Date().toISOString().slice(0, 10),
+          hora_inicio: body.hora_inicio || '08:30:00',
+          hora_fin: body.hora_fin || '10:00:00',
+          estado: 'pendiente_coordinacion'
+        };
+
+        if (body.bloque !== undefined && body.bloque !== null && String(body.bloque).trim() !== '') {
+          payload.bloque = String(body.bloque).trim();
+        }
+
         const creado = await llamarSupabase('/tickets_reasignacion', 'POST', payload);
         const ticket = Array.isArray(creado) ? creado[0] : creado;
 
@@ -60,18 +161,23 @@ export default async function handler(req, res) {
           ticket_id: ticket.id,
           detalles: payload.bloque ? `Bloque ${payload.bloque}: ${payload.motivo}` : payload.motivo
         });
+
         return res.status(200).json(ticket);
       }
 
       case 'derivar_ticket': {
         const { id, coordinador_id } = req.body || {};
-        const resPatch = await llamarSupabase(`/tickets_reasignacion?id=eq.${id}`, 'PATCH', { estado: 'pendiente_administracion' });
+        const resPatch = await llamarSupabase(`/tickets_reasignacion?id=eq.${encodeURIComponent(id)}`, 'PATCH', {
+          estado: 'pendiente_administracion'
+        });
+
         await llamarSupabase('/historial_logs', 'POST', {
-          usuario_id: coordinador_id,
+          usuario_id: Number(coordinador_id),
           accion: 'DERIVAR_TICKET',
-          ticket_id: id,
+          ticket_id: Number(id),
           detalles: 'Ticket derivado por Coordinación a Administración'
         });
+
         return res.status(200).json(Array.isArray(resPatch) ? resPatch[0] : resPatch);
       }
 
@@ -79,34 +185,55 @@ export default async function handler(req, res) {
         const { id, admin_id, sala_final_id, mensaje_admin, accion: accionTicket } = req.body || {};
         const esAprobado = accionTicket === 'aprobado';
 
-        let salaAsignada = sala_final_id || null;
+        let salaAsignada = await resolverSalaId(sala_final_id);
 
         if (esAprobado && !salaAsignada) {
-          const rows = await llamarSupabase(`/tickets_reasignacion?id=eq.${id}&select=sala_preferida_id,sala_actual_id`);
+          const rows = await llamarSupabase(`/tickets_reasignacion?id=eq.${encodeURIComponent(id)}&select=sala_preferida_id,sala_actual_id`);
           const actualTicket = Array.isArray(rows) ? rows[0] : null;
           salaAsignada = actualTicket?.sala_preferida_id ?? actualTicket?.sala_actual_id ?? null;
         }
 
         if (esAprobado && !salaAsignada) {
-          return res.status(400).json({ error: 'Debes seleccionar o tener una sala asignada (sala_final_id) para aprobar el ticket.' });
+          return res.status(400).json({ error: 'Debes seleccionar o tener una sala asignada antes de aprobar el ticket.' });
         }
 
         const payload = {
           estado: accionTicket,
-          sala_final_id: esAprobado ? salaAsignada : null,
+          sala_final_id: esAprobado ? Number(salaAsignada) : null,
           mensaje_admin: mensaje_admin || (esAprobado ? 'Aprobado en administración' : 'Rechazado en administración')
         };
 
-        const resPatch = await llamarSupabase(`/tickets_reasignacion?id=eq.${id}`, 'PATCH', payload);
+        const resPatch = await llamarSupabase(`/tickets_reasignacion?id=eq.${encodeURIComponent(id)}`, 'PATCH', payload);
 
         await llamarSupabase('/historial_logs', 'POST', {
-          usuario_id: admin_id,
+          usuario_id: Number(admin_id),
           accion: esAprobado ? 'APROBAR_TICKET' : 'RECHAZAR_TICKET',
-          ticket_id: id,
+          ticket_id: Number(id),
           detalles: payload.mensaje_admin
         });
 
         return res.status(200).json(Array.isArray(resPatch) ? resPatch[0] : resPatch);
+      }
+
+      case 'logs': {
+        const limite = Number(req.query.limite) || 50;
+        const logs = await llamarSupabase(
+          `/historial_logs?select=*,usuario:usuarios!usuario_id(id,nombre,rut,rol)&order=fecha_hora.desc&limit=${limite}`
+        );
+        return res.status(200).json(logs || []);
+      }
+
+      case 'reportes': {
+        const periodo = (req.query.periodo || 'diario').toLowerCase();
+        const tablaMap = {
+          diario: '/reporte_diario?select=*,sala:salas!sala_id(numero_sala,sede),usuario:usuarios!usuario_id(nombre)&order=fecha.desc',
+          semanal: '/reporte_semanal?select=*,sala:salas!sala_id(numero_sala,sede),usuario:usuarios!usuario_id(nombre)&order=anio.desc,semana.desc',
+          mensual: '/reporte_mensual?select=*,sala:salas!sala_id(numero_sala,sede),usuario:usuarios!usuario_id(nombre)&order=anio.desc,mes.desc',
+          anual: '/reporte_anual?select=*,sala:salas!sala_id(numero_sala,sede),usuario:usuarios!usuario_id(nombre)&order=anio.desc'
+        };
+        const endpoint = tablaMap[periodo] || tablaMap.diario;
+        const datos = await llamarSupabase(endpoint);
+        return res.status(200).json(datos || []);
       }
 
       case 'chat_ia': {

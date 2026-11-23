@@ -13,17 +13,44 @@
   <main class="wrap">
     <div class="heading"><div class="eyebrow">Nueva solicitud</div><h1 id="titulo-docente">Hola, Docente</h1><p>Informa un problema de sala y revisa aquí el avance de tus solicitudes.</p></div>
     <div id="aviso" class="notice" role="status" hidden></div>
+
     <section class="panel">
       <h2>Crear ticket</h2>
       <form id="form-docente">
-        <div class="field"><label for="sala">ID Sala Actual</label><input id="sala" name="sala_actual_id" placeholder="ID de la sala" required></div>
+        <div class="field">
+          <label for="horario-asignado">Autocompletar desde horario asignado</label>
+          <select id="horario-asignado">
+            <option value="">-- Selecciona un horario asignado --</option>
+          </select>
+        </div>
+        <div class="field"><label for="sala">Sala Actual (ID o código, ej: I007)</label><input id="sala" name="sala_actual_id" placeholder="Ej: I007 o ID de la sala" required></div>
+        <div class="field"><label for="sala-preferida">Sala Preferida (ID o código, opcional)</label><input id="sala-preferida" name="sala_preferida_id" placeholder="Ej: I008 o deja vacío"></div>
         <div class="field"><label for="bloque">Bloque horario</label><input id="bloque" name="bloque" placeholder="Ej: 3" required></div>
+        <div class="field">
+          <label for="fecha-necesitada">Fecha</label>
+          <input id="fecha-necesitada" name="fecha_necesitada" type="date" required>
+        </div>
+        <div class="field">
+          <label for="hora-inicio">Hora inicio</label>
+          <input id="hora-inicio" name="hora_inicio" type="time" step="1" required>
+        </div>
+        <div class="field">
+          <label for="hora-fin">Hora fin</label>
+          <input id="hora-fin" name="hora_fin" type="time" step="1" required>
+        </div>
         <div class="field"><label for="motivo">Motivo / Descripción</label><textarea id="motivo" name="motivo" placeholder="Describe brevemente qué ocurre…" required></textarea></div>
         <button class="button" id="enviar" type="submit">Enviar a Coordinación</button>
       </form>
     </section>
+
+    <section class="panel" style="margin-top: 20px;">
+      <h2>Salas disponibles</h2>
+      <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
+    </section>
+
     <section><h2 class="section-title">Mis solicitudes</h2><div id="estado-tickets" class="tickets"><div class="empty">Cargando solicitudes…</div></div></section>
   </main>
+
   <script type="module">
     import { verificarAcceso, cerrarSesion, crearTicket, obtenerTickets } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
@@ -35,16 +62,19 @@
     document.querySelector('#btn-salir').addEventListener('click', cerrarSesion);
 
     const contenedor = document.querySelector('#estado-tickets');
+    const contenedorSalas = document.querySelector('#salas-disponibles');
+    const selectHorario = document.querySelector('#horario-asignado');
     const aviso = document.querySelector('#aviso');
     const form = document.querySelector('#form-docente');
     const boton = document.querySelector('#enviar');
     const misTickets = new Map();
+    let horariosDocente = [];
 
     const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const etiquetas = { pendiente_coordinacion: 'Abierto (Pendiente Coordinación)', pendiente_administracion: 'Derivado a Administración', aprobado: 'Aprobado', rechazado: 'Rechazado' };
 
     function mostrarAviso(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
-    
+
     function tarjeta(t) {
       return `<article class="ticket" id="ticket-${esc(t.id)}"><div class="ticket-top"><div><h3>Ticket #${esc(t.id)}</h3><p><strong>Motivo:</strong> ${esc(t.motivo)}</p><p class="muted">Bloque: ${esc(t.bloque)} · Fecha: ${t.fecha_creacion ? new Date(t.fecha_creacion).toLocaleString('es-CL') : ''}</p></div><span class="badge ${esc(t.estado)}">${esc(etiquetas[t.estado] || t.estado)}</span></div>${t.mensaje_admin ? `<p><strong>Respuesta Admin:</strong> ${esc(t.mensaje_admin)}</p>` : ''}</article>`;
     }
@@ -55,18 +85,90 @@
       contenedor.innerHTML = [...misTickets.values()].sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion)).map(tarjeta).join('') || '<div class="empty">Aún no tienes solicitudes.</div>';
     }
 
+    async function cargarHorariosProfesor() {
+      try {
+        const res = await fetch(`/api/proxy?accion=horarios_profesor&usuario_id=${encodeURIComponent(sesion.id)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error al cargar horarios');
+        horariosDocente = Array.isArray(data) ? data : [];
+        selectHorario.innerHTML = '<option value="">-- Selecciona un horario asignado --</option>' +
+          horariosDocente.map((h, idx) => `<option value="${idx}">${esc(h.numero_sala || h.sala_id)} · ${esc(h.fecha || '')} (${esc(h.hora_inicio || '')} - ${esc(h.hora_fin || '')})</option>`).join('');
+      } catch (e) {
+        console.warn('No se pudieron autocompletar horarios:', e.message);
+      }
+    }
+
+    selectHorario.addEventListener('change', () => {
+      const h = horariosDocente[Number(selectHorario.value)];
+      if (!h) return;
+      document.querySelector('#sala').value = h.sala_id ?? h.numero_sala ?? '';
+      if (h.fecha) document.querySelector('#fecha-necesitada').value = String(h.fecha).slice(0, 10);
+      if (h.hora_inicio) document.querySelector('#hora-inicio').value = String(h.hora_inicio).slice(0, 8);
+      if (h.hora_fin) document.querySelector('#hora-fin').value = String(h.hora_fin).slice(0, 8);
+      if (!document.querySelector('#bloque').value && h.hora_inicio) {
+        document.querySelector('#bloque').value = String(h.hora_inicio).slice(0, 5);
+      }
+    });
+
+    async function cargarSalasDisponibles() {
+      try {
+        const fechaSel = document.querySelector('#fecha-necesitada').value;
+        const query = fechaSel ? `&fecha=${encodeURIComponent(fechaSel)}` : '';
+        const res = await fetch(`/api/proxy?accion=salas_disponibles${query}`);
+        const salas = await res.json();
+        if (!res.ok) throw new Error(salas.error || 'Error al cargar salas');
+
+        if (!Array.isArray(salas) || !salas.length) {
+          contenedorSalas.innerHTML = '<div class="empty">No hay salas registradas.</div>';
+          return;
+        }
+
+        contenedorSalas.innerHTML = salas.map(s => `
+          <article class="ticket">
+            <div class="ticket-top">
+              <div>
+                <h3>Sala ${esc(s.numero_sala)} (ID: ${esc(s.id)})</h3>
+                <p class="muted">Categoría: ${esc(s.categoria || 'General')} · Sede: ${esc(s.sede || 'AIEP')}</p>
+              </div>
+              <span class="badge ${s.disponible ? 'aprobado' : 'rechazado'}">${s.disponible ? 'Disponible' : 'Ocupada'}</span>
+            </div>
+            <div class="button-row">
+              <button type="button" class="button secondary" data-usar-sala="${esc(s.id)}">Usar como preferida</button>
+            </div>
+          </article>
+        `).join('');
+      } catch (e) {
+        contenedorSalas.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+      }
+    }
+
+    contenedorSalas.addEventListener('click', e => {
+      const btn = e.target.closest('[data-usar-sala]');
+      if (!btn) return;
+      document.querySelector('#sala-preferida').value = btn.dataset.usarSala;
+      mostrarAviso(`Sala #${btn.dataset.usarSala} seleccionada como preferida.`, 'success');
+    });
+
+    document.querySelector('#fecha-necesitada').addEventListener('change', cargarSalasDisponibles);
+
     form.addEventListener('submit', async e => {
       e.preventDefault(); boton.disabled = true; mostrarAviso('Enviando solicitud…');
       try {
         const payload = {
           usuario_id: sesion.id,
           sala_actual_id: document.querySelector('#sala').value.trim(),
+          sala_preferida_id: document.querySelector('#sala-preferida').value.trim() || null,
           bloque: document.querySelector('#bloque').value.trim(),
+          fecha_necesitada: document.querySelector('#fecha-necesitada').value,
+          hora_inicio: document.querySelector('#hora-inicio').value,
+          hora_fin: document.querySelector('#hora-fin').value,
           motivo: document.querySelector('#motivo').value.trim()
         };
         const creado = await crearTicket(payload);
         if (creado) guardarTicket(creado);
-        form.reset(); mostrarAviso('Ticket enviado correctamente.', 'success');
+        form.reset();
+        mostrarAviso('Ticket enviado correctamente.', 'success');
+        await cargarSalasDisponibles();
       } catch (error) { mostrarAviso(error.message || 'No se pudo enviar el ticket.', 'error'); }
       finally { boton.disabled = false; }
     });
@@ -76,6 +178,7 @@
         alCrearTicket: guardarTicket,
         alActualizarTicket: guardarTicket
       });
+      await Promise.all([cargarHorariosProfesor(), cargarSalasDisponibles()]);
       const lista = await obtenerTickets();
       lista.filter(t => t.usuario_id === sesion.id).forEach(guardarTicket);
       if (!misTickets.size) contenedor.innerHTML = '<div class="empty">Aún no tienes solicitudes.</div>';

@@ -12,8 +12,8 @@
     <button class="button secondary" id="btn-salir" style="padding:4px 10px;font-size:12px;">Salir</button>
   </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Casos escalados</div><h1>Revisión de Administración</h1><p>Resuelve las solicitudes y consulta el reporte inteligente con IA.</p></div>
-    
+    <div class="heading"><div class="eyebrow">Casos escalados</div><h1>Revisión de Administración</h1><p>Resuelve las solicitudes, revisa salas, logs, reportes y consulta la IA.</p></div>
+
     <!-- Sección de Asistente IA NVIDIA -->
     <section class="panel" style="margin-bottom: 20px;">
       <h2>Asistente Gerencial (IA NVIDIA)</h2>
@@ -23,8 +23,41 @@
     </section>
 
     <div id="aviso" class="notice" role="status" hidden></div>
-    <section><h2 class="section-title">Tickets derivados</h2><div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div></section>
+
+    <!-- Tickets derivados -->
+    <section>
+      <h2 class="section-title">Tickets derivados</h2>
+      <div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div>
+    </section>
+
+    <!-- Salas disponibles -->
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Salas disponibles</h2>
+      <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
+    </section>
+
+    <!-- Reportes -->
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Reportes de uso</h2>
+      <div class="field">
+        <label for="selector-periodo">Periodo</label>
+        <select id="selector-periodo">
+          <option value="diario">Diario</option>
+          <option value="semanal">Semanal</option>
+          <option value="mensual">Mensual</option>
+          <option value="anual">Anual</option>
+        </select>
+      </div>
+      <div id="tabla-reportes" class="tickets"><div class="empty">Cargando reportes…</div></div>
+    </section>
+
+    <!-- Logs de auditoría -->
+    <section class="panel" style="margin-top: 24px;">
+      <h2>Historial de logs</h2>
+      <div id="lista-logs" class="tickets"><div class="empty">Cargando logs…</div></div>
+    </section>
   </main>
+
   <script type="module">
     import { verificarAcceso, cerrarSesion, obtenerTickets, resolverTicketAdmin, generarReporteIA } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
@@ -35,18 +68,51 @@
     document.querySelector('#btn-salir').addEventListener('click', cerrarSesion);
 
     const bandeja = document.querySelector('#bandeja-jefatura');
+    const contenedorSalas = document.querySelector('#salas-disponibles');
+    const contenedorReportes = document.querySelector('#tabla-reportes');
+    const contenedorLogs = document.querySelector('#lista-logs');
+    const selectorPeriodo = document.querySelector('#selector-periodo');
     const aviso = document.querySelector('#aviso');
     const conexion = document.querySelector('#conexion');
     const tickets = new Map();
     const estadosVisibles = new Set(['pendiente_administracion', 'aprobado', 'rechazado']);
+    let salasCache = [];
 
     const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const etiquetas = { pendiente_administracion: 'Pendiente de decisión', aprobado: 'Aprobado', rechazado: 'Rechazado' };
 
     function avisoTexto(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
 
+    function opcionesSalas(seleccionado) {
+      const actual = String(seleccionado ?? '');
+      return '<option value="">-- Selecciona sala --</option>' +
+        salasCache.map(s => `<option value="${esc(s.id)}" ${String(s.id) === actual ? 'selected' : ''}>Sala ${esc(s.numero_sala)} (${esc(s.sede || 'AIEP')})</option>`).join('');
+    }
+
     function tarjeta(t) {
-      return `<article class="ticket" id="jef-${esc(t.id)}"><div class="ticket-top"><div><h3>Expediente #${esc(t.id)}</h3><p><strong>Motivo:</strong> ${esc(t.motivo)}</p><p class="muted">Bloque: ${esc(t.bloque)}</p></div><span class="badge ${esc(t.estado)}">${esc(etiquetas[t.estado] || t.estado)}</span></div>${t.estado === 'pendiente_administracion' ? `<div class="button-row"><button class="button" data-resolver="aprobado" data-id="${esc(t.id)}">Aprobar</button><button class="button danger" data-resolver="rechazado" data-id="${esc(t.id)}">Rechazar</button></div>` : ''}</article>`;
+      const salaSugerida = t.sala_final_id ?? t.sala_preferida_id ?? t.sala_actual_id ?? '';
+      return `
+        <article class="ticket" id="jef-${esc(t.id)}">
+          <div class="ticket-top">
+            <div>
+              <h3>Expediente #${esc(t.id)}</h3>
+              <p><strong>Motivo:</strong> ${esc(t.motivo)}</p>
+              <p class="muted">Bloque: ${esc(t.bloque)}</p>
+            </div>
+            <span class="badge ${esc(t.estado)}">${esc(etiquetas[t.estado] || t.estado)}</span>
+          </div>
+          ${t.estado === 'pendiente_administracion' ? `
+            <div class="field" style="margin-top:10px;">
+              <label for="sala-final-${esc(t.id)}">Sala asignada para aprobar</label>
+              <select id="sala-final-${esc(t.id)}">${opcionesSalas(salaSugerida)}</select>
+            </div>
+            <div class="button-row">
+              <button class="button" data-resolver="aprobado" data-id="${esc(t.id)}">Aprobar</button>
+              <button class="button danger" data-resolver="rechazado" data-id="${esc(t.id)}">Rechazar</button>
+            </div>
+          ` : ''}
+        </article>
+      `;
     }
 
     function dibujar() {
@@ -55,22 +121,105 @@
 
     function guardar(t) { if (estadosVisibles.has(t.estado)) tickets.set(String(t.id), t); else tickets.delete(String(t.id)); dibujar(); }
 
+    async function cargarSalasDisponibles() {
+      try {
+        const res = await fetch('/api/proxy?accion=salas_disponibles');
+        const salas = await res.json();
+        if (!res.ok) throw new Error(salas.error || 'Error al cargar salas');
+        salasCache = Array.isArray(salas) ? salas : [];
+        contenedorSalas.innerHTML = salasCache.map(s => `
+          <article class="ticket">
+            <div class="ticket-top">
+              <div>
+                <h3>Sala ${esc(s.numero_sala)} (ID: ${esc(s.id)})</h3>
+                <p class="muted">Categoría: ${esc(s.categoria || 'General')} · Sede: ${esc(s.sede || 'AIEP')}</p>
+              </div>
+              <span class="badge ${s.disponible ? 'aprobado' : 'rechazado'}">${s.disponible ? 'Disponible' : 'Ocupada'}</span>
+            </div>
+          </article>
+        `).join('') || '<div class="empty">No hay salas disponibles.</div>';
+        dibujar();
+      } catch (e) {
+        contenedorSalas.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+      }
+    }
+
+    async function cargarReportes(periodo = 'diario') {
+      try {
+        const res = await fetch(`/api/proxy?accion=reportes&periodo=${encodeURIComponent(periodo)}`);
+        const filas = await res.json();
+        if (!res.ok) throw new Error(filas.error || 'Error al cargar reportes');
+        if (!Array.isArray(filas) || !filas.length) {
+          contenedorReportes.innerHTML = '<div class="empty">Sin registros de reporte para este periodo.</div>';
+          return;
+        }
+        contenedorReportes.innerHTML = filas.map(r => `
+          <article class="ticket">
+            <div class="ticket-top">
+              <div>
+                <h3>Sala ${esc(r.sala?.numero_sala ?? r.sala_id)} · ${esc(r.usuario?.nombre ?? `Usuario #${r.usuario_id}`)}</h3>
+                <p class="muted">Usos: ${esc(r.cantidad_usos)} · Horas totales: ${esc(r.horas_totales)} ${r.fecha ? `· Fecha: ${esc(r.fecha)}` : r.semana ? `· Semana ${esc(r.semana)}/${esc(r.anio)}` : r.mes ? `· Mes ${esc(r.mes)}/${esc(r.anio)}` : `· Año ${esc(r.anio)}`}</p>
+              </div>
+            </div>
+          </article>
+        `).join('');
+      } catch (e) {
+        contenedorReportes.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+      }
+    }
+
+    async function cargarLogs() {
+      try {
+        const res = await fetch('/api/proxy?accion=logs&limite=30');
+        const logs = await res.json();
+        if (!res.ok) throw new Error(logs.error || 'Error al cargar logs');
+        if (!Array.isArray(logs) || !logs.length) {
+          contenedorLogs.innerHTML = '<div class="empty">No hay logs registrados.</div>';
+          return;
+        }
+        contenedorLogs.innerHTML = logs.map(l => `
+          <article class="ticket">
+            <div class="ticket-top">
+              <div>
+                <h3>${esc(l.accion)} · Ticket #${esc(l.ticket_id ?? '-')}</h3>
+                <p>${esc(l.detalles || '')}</p>
+                <p class="muted">Por: ${esc(l.usuario?.nombre ?? `Usuario #${l.usuario_id}`)} · ${l.fecha_hora ? new Date(l.fecha_hora).toLocaleString('es-CL') : ''}</p>
+              </div>
+            </div>
+          </article>
+        `).join('');
+      } catch (e) {
+        contenedorLogs.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+      }
+    }
+
+    selectorPeriodo.addEventListener('change', () => cargarReportes(selectorPeriodo.value));
+
     bandeja.addEventListener('click', async e => {
       const boton = e.target.closest('[data-resolver]'); if (!boton) return;
+      const idTicket = boton.dataset.id;
       const decision = boton.dataset.resolver;
+      const selectSala = document.querySelector(`#sala-final-${CSS.escape(idTicket)}`);
+      const salaFinalId = decision === 'aprobado' ? (selectSala?.value || null) : null;
+
+      if (decision === 'aprobado' && !salaFinalId) {
+        avisoTexto('Selecciona una sala antes de aprobar el ticket.', 'error');
+        return;
+      }
+
       const mensaje = window.prompt('Mensaje o resolución para el docente (opcional):') || '';
       try {
-        await resolverTicketAdmin(boton.dataset.id, sesion.id, null, mensaje, decision);
+        await resolverTicketAdmin(idTicket, sesion.id, salaFinalId, mensaje, decision);
         avisoTexto(`Ticket ${decision}.`, 'success');
+        await Promise.all([cargarSalasDisponibles(), cargarLogs(), cargarReportes(selectorPeriodo.value)]);
       } catch (error) { avisoTexto(error.message || 'No se pudo guardar la decisión.', 'error'); dibujar(); }
     });
 
-    // Lógica del botón de IA
     document.querySelector('#btn-consultar-ia').addEventListener('click', async () => {
       const pregunta = document.querySelector('#input-ia').value.trim();
       const cajaRespuesta = document.querySelector('#respuesta-ia');
       if (!pregunta) return alert('Escribe una pregunta para la IA.');
-      
+
       cajaRespuesta.hidden = false;
       cajaRespuesta.textContent = 'Generando respuesta con NVIDIA NIM...';
       try {
@@ -85,12 +234,16 @@
     try {
       escucharTiempoReal({
         alCrearTicket: guardar,
-        alActualizarTicket: guardar,
+        alActualizarTicket: async t => {
+          guardar(t);
+          await Promise.all([cargarLogs(), cargarSalasDisponibles()]);
+        },
         alEstadoConexion: estado => {
           conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
         }
       });
+      await Promise.all([cargarSalasDisponibles(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
       (await obtenerTickets()).forEach(guardar);
       dibujar();
     } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los casos.</div>'; avisoTexto(error.message, 'error'); }
