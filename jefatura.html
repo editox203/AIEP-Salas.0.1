@@ -34,13 +34,17 @@
       <div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div>
     </section>
 
-    <!-- Pestaña 2: Salas disponibles + Reserva para el día siguiente -->
+    <!-- Pestaña 2: Salas disponibles + Reserva para el día siguiente asignando profesor -->
     <section id="tab-salas-reserva" class="panel tab-panel" hidden>
       <h2>Salas disponibles y reserva para el día siguiente</h2>
       <form id="form-reserva-manana" style="margin-bottom: 16px;">
         <div class="field">
           <label for="reserva-sala">Sala a reservar para mañana</label>
           <select id="reserva-sala" required></select>
+        </div>
+        <div class="field">
+          <label for="reserva-profesor">Asignar a profesor</label>
+          <select id="reserva-profesor" required></select>
         </div>
         <div class="field">
           <label for="reserva-inicio">Hora inicio</label>
@@ -99,7 +103,7 @@
     import {
       verificarAcceso, cerrarSesion, obtenerTickets, resolverTicketAdmin,
       generarReporteIA, obtenerSalasDisponibles, reservarSalaManana,
-      obtenerReportes, obtenerLogs
+      obtenerReportes, obtenerLogs, obtenerUsuarios
     } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
@@ -120,6 +124,7 @@
     const bandeja = document.querySelector('#bandeja-jefatura');
     const contenedorSalas = document.querySelector('#salas-disponibles');
     const selectReservaSala = document.querySelector('#reserva-sala');
+    const selectReservaProfesor = document.querySelector('#reserva-profesor');
     const contenedorReportes = document.querySelector('#tabla-reportes');
     const contenedorLogs = document.querySelector('#lista-logs');
     const selectorPeriodo = document.querySelector('#selector-periodo');
@@ -187,6 +192,20 @@
       dibujar();
     }
 
+    async function cargarProfesores() {
+      try {
+        const usuarios = await obtenerUsuarios();
+        const lista = Array.isArray(usuarios) ? usuarios : [];
+        const docentes = lista.filter(u => u.rol === 'user');
+        const candidatos = docentes.length ? docentes : lista;
+
+        selectReservaProfesor.innerHTML = '<option value="">-- Selecciona profesor --</option>' +
+          candidatos.map(u => `<option value="${esc(u.id)}" ${String(u.id) === String(sesion.id) ? 'selected' : ''}>${esc(u.nombre)} (${esc(u.rut || u.rol)})</option>`).join('');
+      } catch (e) {
+        selectReservaProfesor.innerHTML = `<option value="${esc(sesion.id)}">${esc(sesion.nombre)}</option>`;
+      }
+    }
+
     async function cargarSalas() {
       try {
         const salas = await obtenerSalasDisponibles();
@@ -228,11 +247,15 @@
     document.querySelector('#form-reserva-manana').addEventListener('submit', async e => {
       e.preventDefault();
       const salaId = selectReservaSala.value;
-      if (!salaId) return avisoTexto('Selecciona una sala para reservar mañana.', 'error');
+      const profesorId = selectReservaProfesor.value;
+      if (!salaId || !profesorId) {
+        return avisoTexto('Selecciona una sala y un profesor para reservar mañana.', 'error');
+      }
       try {
         const res = await reservarSalaManana({
           sala_id: salaId,
-          usuario_id: sesion.id,
+          usuario_id: Number(profesorId),
+          asignado_por_id: sesion.id,
           hora_inicio: document.querySelector('#reserva-inicio').value,
           hora_fin: document.querySelector('#reserva-fin').value,
           motivo: document.querySelector('#reserva-motivo').value.trim()
@@ -334,7 +357,6 @@
       };
     }
 
-    // Dibuja un gráfico de barras horizontales simple y limpio dentro del PDF
     function dibujarGraficoBarrasPdf(doc, titulo, items, yInicial, colorRgb = [40, 87, 217]) {
       const altoItem = 10;
       const altoRequerido = 16 + items.length * altoItem;
@@ -371,15 +393,12 @@
         doc.setTextColor(23, 32, 51);
         doc.text(String(item.etiqueta).slice(0, 22), xLabel, y + 5.5);
 
-        // Fondo suave de barra
         doc.setFillColor(238, 242, 247);
         doc.rect(xBarra, y + 1, anchoMaxBarra, 6, 'F');
 
-        // Barra activa
         doc.setFillColor(colorRgb[0], colorRgb[1], colorRgb[2]);
         doc.rect(xBarra, y + 1, largoBarra, 6, 'F');
 
-        // Valor al final
         doc.setTextColor(56, 68, 90);
         doc.text(`${item.textoValor ?? valor}`, xBarra + anchoMaxBarra + 4, y + 5.5);
 
@@ -396,7 +415,6 @@
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF();
 
-      // Encabezado ordenado
       doc.setFillColor(20, 33, 61);
       doc.rect(0, 0, 210, 28, 'F');
       doc.setTextColor(255, 255, 255);
@@ -408,7 +426,6 @@
       let y = 38;
       doc.setTextColor(23, 32, 51);
 
-      // Bloque de KPIs en tabla de 2 filas
       doc.setFontSize(11);
       doc.text('Resumen de Indicadores', 14, y);
       y += 5;
@@ -437,7 +454,6 @@
 
       y += 8;
 
-      // Gráfico 1: Estado de salas
       y = dibujarGraficoBarrasPdf(
         doc,
         'Grafico 1 · Disponibilidad de Salas',
@@ -449,7 +465,6 @@
         [20, 125, 85]
       );
 
-      // Gráfico 2: Tickets por estado
       y = dibujarGraficoBarrasPdf(
         doc,
         'Grafico 2 · Tickets por Estado',
@@ -462,7 +477,6 @@
         [40, 87, 217]
       );
 
-      // Gráfico 3: Top salas por usos en el periodo
       y = dibujarGraficoBarrasPdf(
         doc,
         `Grafico 3 · Top Salas por Usos (${stats.periodo})`,
@@ -475,7 +489,6 @@
         [154, 98, 0]
       );
 
-      // Detalle ordenado en formato tabla
       if (y > 240) {
         doc.addPage();
         y = 20;
@@ -577,7 +590,7 @@
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
         }
       });
-      await Promise.all([cargarSalas(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
+      await Promise.all([cargarProfesores(), cargarSalas(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
       (await obtenerTickets()).forEach(guardar);
       dibujar();
     } catch (error) {

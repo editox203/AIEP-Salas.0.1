@@ -78,6 +78,13 @@ export default async function handler(req, res) {
         return res.status(200).json(usuarios[0]);
       }
 
+      case 'usuarios': {
+        const usuarios = await llamarSupabase(
+          '/usuarios?select=id,nombre,rut,cargo,rol,escuela&order=nombre.asc'
+        );
+        return res.status(200).json(usuarios || []);
+      }
+
       case 'horarios_profesor': {
         const usuarioId = req.query.usuario_id;
         if (!usuarioId) {
@@ -130,10 +137,13 @@ export default async function handler(req, res) {
       }
 
       case 'reservar_manana': {
-        const { sala_id, usuario_id, hora_inicio, hora_fin, motivo } = req.body || {};
+        const { sala_id, usuario_id, asignado_por_id, hora_inicio, hora_fin, motivo } = req.body || {};
         const salaResuelta = await resolverSalaId(sala_id);
-        if (!salaResuelta || !usuario_id) {
-          return res.status(400).json({ error: 'Falta sala_id o usuario_id para reservar.' });
+        const profesorId = Number(usuario_id || asignado_por_id);
+        const actorId = Number(asignado_por_id || usuario_id);
+
+        if (!salaResuelta || !profesorId) {
+          return res.status(400).json({ error: 'Falta sala_id o profesor para reservar.' });
         }
 
         const fechaManana = obtenerFechaMananaChile();
@@ -142,6 +152,9 @@ export default async function handler(req, res) {
 
         const salasInfo = await llamarSupabase(`/salas?id=eq.${salaResuelta}&select=id,numero_sala,nrc,categoria,sede`);
         const salaObj = Array.isArray(salasInfo) && salasInfo[0] ? salasInfo[0] : {};
+
+        const usuariosInfo = await llamarSupabase(`/usuarios?id=eq.${profesorId}&select=id,nombre`);
+        const profObj = Array.isArray(usuariosInfo) && usuariosInfo[0] ? usuariosInfo[0] : null;
 
         const registro = {
           sala_id: salaResuelta,
@@ -153,16 +166,16 @@ export default async function handler(req, res) {
           categoria: salaObj.categoria || null,
           sede: salaObj.sede || null,
           estado: 1,
-          usuario_id: Number(usuario_id)
+          usuario_id: profesorId
         };
 
         const guardado = await llamarSupabase('/sala_diaria', 'POST', registro);
 
         await llamarSupabase('/historial_logs', 'POST', {
-          usuario_id: Number(usuario_id),
+          usuario_id: actorId,
           accion: 'CREAR_TICKET',
           ticket_id: null,
-          detalles: `Reserva día siguiente (${fechaManana} ${inicio}-${fin}) en sala ${salaObj.numero_sala || salaResuelta}${motivo ? `: ${motivo}` : ''}`
+          detalles: `Reserva día siguiente (${fechaManana} ${inicio}-${fin}) en sala ${salaObj.numero_sala || salaResuelta} asignada a ${profObj?.nombre || `Usuario #${profesorId}`}${motivo ? ` · ${motivo}` : ''}`
         });
 
         return res.status(200).json({

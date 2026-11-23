@@ -52,6 +52,10 @@ export async function iniciarSesion(rut, password) {
   return usuario;
 }
 
+export function obtenerUsuarios() {
+  return llamarAPI('usuarios');
+}
+
 export function obtenerTickets() {
   return llamarAPI('tickets');
 }
