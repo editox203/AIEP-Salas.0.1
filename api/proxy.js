@@ -44,7 +44,6 @@ export default async function handler(req, res) {
     return data;
   }
 
-  // Convierte "I007" (numero_sala) o ID numérico al ID entero de la tabla salas
   async function resolverSalaId(valor) {
     if (valor === null || valor === undefined || String(valor).trim() === '') return null;
     const str = String(valor).trim();
@@ -55,6 +54,15 @@ export default async function handler(req, res) {
       throw new Error(`No existe ninguna sala con código o ID "${str}".`);
     }
     return Number(filas[0].id);
+  }
+
+  function obtenerFechaMananaChile() {
+    const ahoraChile = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Santiago' }));
+    ahoraChile.setDate(ahoraChile.getDate() + 1);
+    const yyyy = ahoraChile.getFullYear();
+    const mm = String(ahoraChile.getMonth() + 1).padStart(2, '0');
+    const dd = String(ahoraChile.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
   }
 
   try {
@@ -121,6 +129,48 @@ export default async function handler(req, res) {
         return res.status(200).json(resultado);
       }
 
+      case 'reservar_manana': {
+        const { sala_id, usuario_id, hora_inicio, hora_fin, motivo } = req.body || {};
+        const salaResuelta = await resolverSalaId(sala_id);
+        if (!salaResuelta || !usuario_id) {
+          return res.status(400).json({ error: 'Falta sala_id o usuario_id para reservar.' });
+        }
+
+        const fechaManana = obtenerFechaMananaChile();
+        const inicio = hora_inicio || '08:30:00';
+        const fin = hora_fin || '10:00:00';
+
+        const salasInfo = await llamarSupabase(`/salas?id=eq.${salaResuelta}&select=id,numero_sala,nrc,categoria,sede`);
+        const salaObj = Array.isArray(salasInfo) && salasInfo[0] ? salasInfo[0] : {};
+
+        const registro = {
+          sala_id: salaResuelta,
+          fecha: fechaManana,
+          hora_inicio: inicio,
+          hora_fin: fin,
+          numero_sala: salaObj.numero_sala || null,
+          nrc: salaObj.nrc || null,
+          categoria: salaObj.categoria || null,
+          sede: salaObj.sede || null,
+          estado: 1,
+          usuario_id: Number(usuario_id)
+        };
+
+        const guardado = await llamarSupabase('/sala_diaria', 'POST', registro);
+
+        await llamarSupabase('/historial_logs', 'POST', {
+          usuario_id: Number(usuario_id),
+          accion: 'CREAR_TICKET',
+          ticket_id: null,
+          detalles: `Reserva día siguiente (${fechaManana} ${inicio}-${fin}) en sala ${salaObj.numero_sala || salaResuelta}${motivo ? `: ${motivo}` : ''}`
+        });
+
+        return res.status(200).json({
+          fecha: fechaManana,
+          reserva: Array.isArray(guardado) ? guardado[0] : guardado
+        });
+      }
+
       case 'tickets': {
         const tickets = await llamarSupabase(
           '/tickets_reasignacion?select=*,docente:usuarios!usuario_id(id,nombre,rut,escuela),sala_actual:salas!sala_actual_id(id,numero_sala,categoria),sala_preferida:salas!sala_preferida_id(id,numero_sala,categoria),sala_final:salas!sala_final_id(id,numero_sala,categoria)&order=fecha_creacion.desc'
@@ -142,7 +192,7 @@ export default async function handler(req, res) {
           sala_actual_id: salaActualId,
           sala_preferida_id: salaPreferidaId,
           motivo: String(body.motivo || '').trim(),
-          fecha_necesitada: body.fecha_necesitada || new Date().toISOString().slice(0, 10),
+          fecha_necesitada: body.fecha_necesitada || obtenerFechaMananaChile(),
           hora_inicio: body.hora_inicio || '08:30:00',
           hora_fin: body.hora_fin || '10:00:00',
           estado: 'pendiente_coordinacion'
@@ -194,13 +244,13 @@ export default async function handler(req, res) {
         }
 
         if (esAprobado && !salaAsignada) {
-          return res.status(400).json({ error: 'Debes seleccionar o tener una sala asignada antes de aprobar el ticket.' });
+          return res.status(400).json({ error: 'Debes seleccionar la sala final antes de aprobar el ticket.' });
         }
 
         const payload = {
           estado: accionTicket,
           sala_final_id: esAprobado ? Number(salaAsignada) : null,
-          mensaje_admin: mensaje_admin || (esAprobado ? 'Aprobado en administración' : 'Rechazado en administración')
+          mensaje_admin: mensaje_admin || (esAprobado ? `Aprobado con sala ID ${salaAsignada}` : 'Rechazado en administración')
         };
 
         const resPatch = await llamarSupabase(`/tickets_reasignacion?id=eq.${encodeURIComponent(id)}`, 'PATCH', payload);
@@ -252,10 +302,16 @@ export default async function handler(req, res) {
           body: JSON.stringify({
             model: 'nvidia/nemotron-3.5-bolt-e4b',
             messages: [
-              { role: 'system', content: 'Eres un asistente administrativo experto en la gestión y análisis de uso de salas de AIEP.' },
-              { role: 'user', content: `Estadísticas actuales del sistema: ${JSON.stringify(estadisticas)}\n\nPregunta de Jefatura: ${pregunta}` }
+              {
+                role: 'system',
+                content: 'Eres un asistente administrativo experto en gestión de salas AIEP. Resume y analiza métricas, reportes estadísticos, tickets y disponibilidad de salas de forma clara, ejecutiva y accionable.'
+              },
+              {
+                role: 'user',
+                content: `Datos estadísticos / reporte actual:\n${typeof estadisticas === 'string' ? estadisticas : JSON.stringify(estadisticas, null, 2)}\n\nInstrucción / Pregunta de Jefatura:\n${pregunta || 'Resume este reporte estadístico y destaca los puntos clave.'}`
+              }
             ],
-            temperature: 1,
+            temperature: 0.7,
             top_p: 0.95,
             max_tokens: 1024,
             seed: 42,

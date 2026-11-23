@@ -83,6 +83,10 @@ export function obtenerSalasDisponibles({ fecha = '', sede = '' } = {}) {
   return llamarAPI('salas_disponibles', { params: `${f}${s}` });
 }
 
+export function reservarSalaManana(payload) {
+  return llamarAPI('reservar_manana', { method: 'POST', body: payload });
+}
+
 export function obtenerLogs(limite = 30) {
   return llamarAPI('logs', { params: `&limite=${encodeURIComponent(limite)}` });
 }

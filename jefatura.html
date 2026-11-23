@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Administración | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -12,35 +13,50 @@
     <button class="button secondary" id="btn-salir" style="padding:4px 10px;font-size:12px;">Salir</button>
   </header>
   <main class="wrap">
-    <div class="heading"><div class="eyebrow">Casos escalados</div><h1>Revisión de Administración</h1><p>Resuelve las solicitudes, revisa salas, logs, reportes y consulta la IA.</p></div>
-
-    <!-- Sección de Asistente IA NVIDIA -->
-    <section class="panel" style="margin-bottom: 20px;">
-      <h2>Asistente Gerencial (IA NVIDIA)</h2>
-      <div class="field"><input id="input-ia" placeholder="Ej: ¿Qué salas tienen más solicitudes pendientes?" style="width:100%; margin-bottom:10px;"></div>
-      <button class="button" id="btn-consultar-ia">Consultar a la IA</button>
-      <div id="respuesta-ia" class="notice" style="margin-top: 15px; white-space: pre-wrap;" hidden></div>
-    </section>
+    <div class="heading">
+      <div class="eyebrow">Casos escalados</div>
+      <h1>Revisión de Administración</h1>
+      <p>Asigna la sala final al resolver, reserva para mañana, exporta el reporte estadístico en PDF y resúmelo con IA.</p>
+    </div>
 
     <div id="aviso" class="notice" role="status" hidden></div>
 
-    <!-- Tickets derivados -->
+    <!-- Tickets derivados con elección final de sala -->
     <section>
       <h2 class="section-title">Tickets derivados</h2>
       <div id="bandeja-jefatura" class="tickets"><div class="empty">Cargando casos…</div></div>
     </section>
 
-    <!-- Salas disponibles -->
+    <!-- Salas disponibles + Reserva para el día siguiente -->
     <section class="panel" style="margin-top: 24px;">
-      <h2>Salas disponibles</h2>
+      <h2>Salas disponibles y reserva para el día siguiente</h2>
+      <form id="form-reserva-manana" style="margin-bottom: 16px;">
+        <div class="field">
+          <label for="reserva-sala">Sala a reservar para mañana</label>
+          <select id="reserva-sala" required></select>
+        </div>
+        <div class="field">
+          <label for="reserva-inicio">Hora inicio</label>
+          <input id="reserva-inicio" type="time" step="1" value="08:30:00" required>
+        </div>
+        <div class="field">
+          <label for="reserva-fin">Hora fin</label>
+          <input id="reserva-fin" type="time" step="1" value="10:00:00" required>
+        </div>
+        <div class="field">
+          <label for="reserva-motivo">Motivo / Observación (opcional)</label>
+          <input id="reserva-motivo" placeholder="Ej: Evaluación o laboratorio mañana">
+        </div>
+        <button class="button" type="submit">Reservar para el día siguiente</button>
+      </form>
       <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
     </section>
 
-    <!-- Reportes -->
+    <!-- Reportes + Generación de PDF Estadístico + Resumen con IA -->
     <section class="panel" style="margin-top: 24px;">
-      <h2>Reportes de uso</h2>
+      <h2>Reporte estadístico (PDF desde DB) y Asistente IA</h2>
       <div class="field">
-        <label for="selector-periodo">Periodo</label>
+        <label for="selector-periodo">Periodo del reporte</label>
         <select id="selector-periodo">
           <option value="diario">Diario</option>
           <option value="semanal">Semanal</option>
@@ -48,7 +64,21 @@
           <option value="anual">Anual</option>
         </select>
       </div>
+      <div class="button-row" style="margin-bottom: 16px;">
+        <button class="button" type="button" id="btn-generar-pdf">Generar y descargar PDF estadístico</button>
+        <button class="button secondary" type="button" id="btn-resumir-pdf-ia">Resumir reporte con IA</button>
+      </div>
+
       <div id="tabla-reportes" class="tickets"><div class="empty">Cargando reportes…</div></div>
+
+      <div style="margin-top: 20px;">
+        <div class="field">
+          <label for="input-ia">Consulta o instrucción para la IA NVIDIA</label>
+          <input id="input-ia" placeholder="Ej: Resume el reporte estadístico y dime qué salas requieren atención">
+        </div>
+        <button class="button" type="button" id="btn-consultar-ia">Consultar a la IA</button>
+        <div id="respuesta-ia" class="notice" style="margin-top: 15px; white-space: pre-wrap;" hidden></div>
+      </div>
     </section>
 
     <!-- Logs de auditoría -->
@@ -59,7 +89,11 @@
   </main>
 
   <script type="module">
-    import { verificarAcceso, cerrarSesion, obtenerTickets, resolverTicketAdmin, generarReporteIA } from './js/supabase-ajax.js';
+    import {
+      verificarAcceso, cerrarSesion, obtenerTickets, resolverTicketAdmin,
+      generarReporteIA, obtenerSalasDisponibles, reservarSalaManana,
+      obtenerReportes, obtenerLogs
+    } from './js/supabase-ajax.js';
     import { escucharTiempoReal } from './js/supabase-socket.js';
 
     const sesion = verificarAcceso('superadmin');
@@ -69,6 +103,7 @@
 
     const bandeja = document.querySelector('#bandeja-jefatura');
     const contenedorSalas = document.querySelector('#salas-disponibles');
+    const selectReservaSala = document.querySelector('#reserva-sala');
     const contenedorReportes = document.querySelector('#tabla-reportes');
     const contenedorLogs = document.querySelector('#lista-logs');
     const selectorPeriodo = document.querySelector('#selector-periodo');
@@ -76,16 +111,24 @@
     const conexion = document.querySelector('#conexion');
     const tickets = new Map();
     const estadosVisibles = new Set(['pendiente_administracion', 'aprobado', 'rechazado']);
+
     let salasCache = [];
+    let reportesCache = [];
+    let logsCache = [];
+    let ultimoResumenEstadistico = '';
 
     const esc = valor => String(valor ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const etiquetas = { pendiente_administracion: 'Pendiente de decisión', aprobado: 'Aprobado', rechazado: 'Rechazado' };
 
-    function avisoTexto(texto, tipo = '') { aviso.className = `notice ${tipo}`; aviso.textContent = texto; aviso.hidden = !texto; }
+    function avisoTexto(texto, tipo = '') {
+      aviso.className = `notice ${tipo}`;
+      aviso.textContent = texto;
+      aviso.hidden = !texto;
+    }
 
     function opcionesSalas(seleccionado) {
       const actual = String(seleccionado ?? '');
-      return '<option value="">-- Selecciona sala --</option>' +
+      return '<option value="">-- Elige la sala final --</option>' +
         salasCache.map(s => `<option value="${esc(s.id)}" ${String(s.id) === actual ? 'selected' : ''}>Sala ${esc(s.numero_sala)} (${esc(s.sede || 'AIEP')})</option>`).join('');
     }
 
@@ -97,36 +140,49 @@
             <div>
               <h3>Expediente #${esc(t.id)}</h3>
               <p><strong>Motivo:</strong> ${esc(t.motivo)}</p>
-              <p class="muted">Bloque: ${esc(t.bloque)}</p>
+              <p class="muted">Bloque: ${esc(t.bloque || '-')} · Sala actual: ${esc(t.sala_actual?.numero_sala || t.sala_actual_id || '-')} · Preferida: ${esc(t.sala_preferida?.numero_sala || t.sala_preferida_id || '-')}</p>
             </div>
             <span class="badge ${esc(t.estado)}">${esc(etiquetas[t.estado] || t.estado)}</span>
           </div>
           ${t.estado === 'pendiente_administracion' ? `
             <div class="field" style="margin-top:10px;">
-              <label for="sala-final-${esc(t.id)}">Sala asignada para aprobar</label>
+              <label for="sala-final-${esc(t.id)}">Elección final de sala</label>
               <select id="sala-final-${esc(t.id)}">${opcionesSalas(salaSugerida)}</select>
             </div>
             <div class="button-row">
-              <button class="button" data-resolver="aprobado" data-id="${esc(t.id)}">Aprobar</button>
+              <button class="button" data-resolver="aprobado" data-id="${esc(t.id)}">Aprobar con sala elegida</button>
               <button class="button danger" data-resolver="rechazado" data-id="${esc(t.id)}">Rechazar</button>
             </div>
-          ` : ''}
+          ` : `<p class="muted">Sala final: ${esc(t.sala_final?.numero_sala || t.sala_final_id || 'No asignada')}</p>`}
         </article>
       `;
     }
 
     function dibujar() {
-      bandeja.innerHTML = [...tickets.values()].filter(t => estadosVisibles.has(t.estado)).sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion)).map(tarjeta).join('') || '<div class="empty">No hay casos derivados.</div>';
+      bandeja.innerHTML = [...tickets.values()]
+        .filter(t => estadosVisibles.has(t.estado))
+        .sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion))
+        .map(tarjeta)
+        .join('') || '<div class="empty">No hay casos derivados.</div>';
     }
 
-    function guardar(t) { if (estadosVisibles.has(t.estado)) tickets.set(String(t.id), t); else tickets.delete(String(t.id)); dibujar(); }
+    function guardar(t) {
+      if (estadosVisibles.has(t.estado)) tickets.set(String(t.id), t);
+      else tickets.delete(String(t.id));
+      dibujar();
+    }
 
     async function cargarSalasDisponibles() {
       try {
-        const res = await fetch('/api/proxy?accion=salas_disponibles');
-        const salas = await res.json();
-        if (!res.ok) throw new Error(salas.error || 'Error al cargar salas');
+        const salas = await obtenerSalasDisponibles();
         salasCache = Array.isArray(salas) ? salas : [];
+
+        const disponibles = salasCache.filter(s => s.disponible);
+        selectReservaSala.innerHTML = '<option value="">-- Selecciona sala disponible --</option>' +
+          (disponibles.length ? disponibles : salasCache)
+            .map(s => `<option value="${esc(s.id)}">Sala ${esc(s.numero_sala)} (${s.disponible ? 'Disponible' : 'Ocupada'} · ${esc(s.sede || 'AIEP')})</option>`)
+            .join('');
+
         contenedorSalas.innerHTML = salasCache.map(s => `
           <article class="ticket">
             <div class="ticket-top">
@@ -136,24 +192,62 @@
               </div>
               <span class="badge ${s.disponible ? 'aprobado' : 'rechazado'}">${s.disponible ? 'Disponible' : 'Ocupada'}</span>
             </div>
+            <div class="button-row">
+              <button type="button" class="button secondary" data-seleccionar-reserva="${esc(s.id)}">Seleccionar para mañana</button>
+            </div>
           </article>
         `).join('') || '<div class="empty">No hay salas disponibles.</div>';
+
         dibujar();
       } catch (e) {
         contenedorSalas.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
       }
     }
 
+    contenedorSalas.addEventListener('click', e => {
+      const btn = e.target.closest('[data-seleccionar-reserva]');
+      if (!btn) return;
+      selectReservaSala.value = btn.dataset.seleccionarReserva;
+      selectReservaSala.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+
+    document.querySelector('#form-reserva-manana').addEventListener('submit', async e => {
+      e.preventDefault();
+      const salaId = selectReservaSala.value;
+      const horaInicio = document.querySelector('#reserva-inicio').value;
+      const horaFin = document.querySelector('#reserva-fin').value;
+      const motivo = document.querySelector('#reserva-motivo').value.trim();
+
+      if (!salaId) {
+        avisoTexto('Selecciona una sala para reservar mañana.', 'error');
+        return;
+      }
+
+      try {
+        const res = await reservarSalaManana({
+          sala_id: salaId,
+          usuario_id: sesion.id,
+          hora_inicio: horaInicio,
+          hora_fin: horaFin,
+          motivo
+        });
+        avisoTexto(`Reserva creada para el día siguiente (${res.fecha}).`, 'success');
+        document.querySelector('#reserva-motivo').value = '';
+        await Promise.all([cargarSalasDisponibles(), cargarLogs()]);
+      } catch (err) {
+        avisoTexto(err.message || 'No se pudo crear la reserva para mañana.', 'error');
+      }
+    });
+
     async function cargarReportes(periodo = 'diario') {
       try {
-        const res = await fetch(`/api/proxy?accion=reportes&periodo=${encodeURIComponent(periodo)}`);
-        const filas = await res.json();
-        if (!res.ok) throw new Error(filas.error || 'Error al cargar reportes');
-        if (!Array.isArray(filas) || !filas.length) {
+        const filas = await obtenerReportes(periodo);
+        reportesCache = Array.isArray(filas) ? filas : [];
+        if (!reportesCache.length) {
           contenedorReportes.innerHTML = '<div class="empty">Sin registros de reporte para este periodo.</div>';
           return;
         }
-        contenedorReportes.innerHTML = filas.map(r => `
+        contenedorReportes.innerHTML = reportesCache.map(r => `
           <article class="ticket">
             <div class="ticket-top">
               <div>
@@ -170,14 +264,13 @@
 
     async function cargarLogs() {
       try {
-        const res = await fetch('/api/proxy?accion=logs&limite=30');
-        const logs = await res.json();
-        if (!res.ok) throw new Error(logs.error || 'Error al cargar logs');
-        if (!Array.isArray(logs) || !logs.length) {
+        const logs = await obtenerLogs(30);
+        logsCache = Array.isArray(logs) ? logs : [];
+        if (!logsCache.length) {
           contenedorLogs.innerHTML = '<div class="empty">No hay logs registrados.</div>';
           return;
         }
-        contenedorLogs.innerHTML = logs.map(l => `
+        contenedorLogs.innerHTML = logsCache.map(l => `
           <article class="ticket">
             <div class="ticket-top">
               <div>
@@ -193,17 +286,131 @@
       }
     }
 
+    function construirDatosEstadisticos() {
+      const listaTickets = [...tickets.values()];
+      const totalTickets = listaTickets.length;
+      const pendientes = listaTickets.filter(t => t.estado === 'pendiente_administracion').length;
+      const aprobados = listaTickets.filter(t => t.estado === 'aprobado').length;
+      const rechazados = listaTickets.filter(t => t.estado === 'rechazado').length;
+
+      const totalSalas = salasCache.length;
+      const salasLibres = salasCache.filter(s => s.disponible).length;
+      const salasOcupadas = totalSalas - salasLibres;
+
+      const totalUsos = reportesCache.reduce((acc, r) => acc + Number(r.cantidad_usos || 0), 0);
+      const totalHoras = reportesCache.reduce((acc, r) => acc + Number(r.horas_totales || 0), 0);
+
+      const textoPlano = [
+        `Periodo reporte: ${selectorPeriodo.value}`,
+        `Salas totales: ${totalSalas} | Disponibles: ${salasLibres} | Ocupadas: ${salasOcupadas}`,
+        `Tickets visibles: ${totalTickets} | Pendientes admin: ${pendientes} | Aprobados: ${aprobados} | Rechazados: ${rechazados}`,
+        `Registros de reporte (${selectorPeriodo.value}): ${reportesCache.length} | Usos acumulados: ${totalUsos} | Horas totales: ${totalHoras.toFixed(2)}`,
+        `Ultimos logs: ${logsCache.slice(0, 5).map(l => `[${l.accion}] ${l.detalles || ''}`).join(' ; ')}`
+      ].join('\n');
+
+      ultimoResumenEstadistico = textoPlano;
+
+      return {
+        periodo: selectorPeriodo.value,
+        salas: { total: totalSalas, disponibles: salasLibres, ocupadas: salasOcupadas },
+        tickets: { total: totalTickets, pendientes, aprobados, rechazados },
+        reportes: { cantidadRegistros: reportesCache.length, totalUsos, totalHoras: Number(totalHoras.toFixed(2)), items: reportesCache.slice(0, 20) },
+        logsRecientes: logsCache.slice(0, 10),
+        resumenTexto: textoPlano
+      };
+    }
+
+    document.querySelector('#btn-generar-pdf').addEventListener('click', () => {
+      if (!window.jspdf?.jsPDF) {
+        avisoTexto('No se cargó la librería jsPDF. Revisa la conexión a internet.', 'error');
+        return;
+      }
+
+      const stats = construirDatosEstadisticos();
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+
+      doc.setFontSize(16);
+      doc.text('Reporte Estadistico de Gestion de Salas - AIEP', 14, 18);
+
+      doc.setFontSize(10);
+      doc.text(`Generado: ${new Date().toLocaleString('es-CL')} | Periodo: ${stats.periodo}`, 14, 26);
+
+      doc.setFontSize(12);
+      doc.text('1. Indicadores Generales', 14, 38);
+      doc.setFontSize(10);
+      const lineasResumen = doc.splitTextToSize(stats.resumenTexto, 180);
+      doc.text(lineasResumen, 14, 45);
+
+      let y = 45 + lineasResumen.length * 6 + 8;
+      doc.setFontSize(12);
+      doc.text(`2. Detalle de Reportes (${stats.periodo})`, 14, y);
+      y += 7;
+      doc.setFontSize(9);
+
+      if (!reportesCache.length) {
+        doc.text('Sin filas en la tabla de reportes para este periodo.', 14, y);
+      } else {
+        for (const r of reportesCache.slice(0, 25)) {
+          if (y > 275) {
+            doc.addPage();
+            y = 20;
+          }
+          const salaLabel = r.sala?.numero_sala || r.sala_id;
+          const usuarioLabel = r.usuario?.nombre || `Usuario #${r.usuario_id}`;
+          const filaTexto = `Sala ${salaLabel} | Docente/Usuario: ${usuarioLabel} | Usos: ${r.cantidad_usos} | Horas: ${r.horas_totales}`;
+          doc.text(filaTexto, 14, y);
+          y += 6;
+        }
+      }
+
+      doc.save(`reporte-estadistico-salas-${stats.periodo}.pdf`);
+      avisoTexto('PDF estadístico generado y descargado desde los datos de la DB.', 'success');
+    });
+
+    async function pedirResumenIA(preguntaPersonalizada) {
+      const stats = construirDatosEstadisticos();
+      const cajaRespuesta = document.querySelector('#respuesta-ia');
+      cajaRespuesta.hidden = false;
+      cajaRespuesta.textContent = 'Analizando estadísticas y resumiendo con IA NVIDIA...';
+
+      try {
+        const respuesta = await generarReporteIA(preguntaPersonalizada, stats);
+        cajaRespuesta.textContent = respuesta;
+      } catch (err) {
+        cajaRespuesta.textContent = 'Error al consultar la IA: ' + err.message;
+      }
+    }
+
+    document.querySelector('#btn-resumir-pdf-ia').addEventListener('click', () => {
+      const stats = construirDatosEstadisticos();
+      pedirResumenIA(
+        `Genera un resumen ejecutivo claro de este reporte estadístico (${stats.periodo}):\n${stats.resumenTexto}`
+      );
+    });
+
+    document.querySelector('#btn-consultar-ia').addEventListener('click', () => {
+      const pregunta = document.querySelector('#input-ia').value.trim();
+      if (!pregunta) {
+        avisoTexto('Escribe una pregunta o instrucción para la IA.', 'error');
+        return;
+      }
+      pedirResumenIA(pregunta);
+    });
+
     selectorPeriodo.addEventListener('change', () => cargarReportes(selectorPeriodo.value));
 
     bandeja.addEventListener('click', async e => {
-      const boton = e.target.closest('[data-resolver]'); if (!boton) return;
+      const boton = e.target.closest('[data-resolver]');
+      if (!boton) return;
+
       const idTicket = boton.dataset.id;
       const decision = boton.dataset.resolver;
       const selectSala = document.querySelector(`#sala-final-${CSS.escape(idTicket)}`);
       const salaFinalId = decision === 'aprobado' ? (selectSala?.value || null) : null;
 
       if (decision === 'aprobado' && !salaFinalId) {
-        avisoTexto('Selecciona una sala antes de aprobar el ticket.', 'error');
+        avisoTexto('Debes elegir la sala final antes de aprobar el ticket.', 'error');
         return;
       }
 
@@ -212,22 +419,9 @@
         await resolverTicketAdmin(idTicket, sesion.id, salaFinalId, mensaje, decision);
         avisoTexto(`Ticket ${decision}.`, 'success');
         await Promise.all([cargarSalasDisponibles(), cargarLogs(), cargarReportes(selectorPeriodo.value)]);
-      } catch (error) { avisoTexto(error.message || 'No se pudo guardar la decisión.', 'error'); dibujar(); }
-    });
-
-    document.querySelector('#btn-consultar-ia').addEventListener('click', async () => {
-      const pregunta = document.querySelector('#input-ia').value.trim();
-      const cajaRespuesta = document.querySelector('#respuesta-ia');
-      if (!pregunta) return alert('Escribe una pregunta para la IA.');
-
-      cajaRespuesta.hidden = false;
-      cajaRespuesta.textContent = 'Generando respuesta con NVIDIA NIM...';
-      try {
-        const todos = [...tickets.values()];
-        const respuesta = await generarReporteIA(pregunta, todos);
-        cajaRespuesta.textContent = respuesta;
-      } catch (err) {
-        cajaRespuesta.textContent = 'Error al consultar la IA: ' + err.message;
+      } catch (error) {
+        avisoTexto(error.message || 'No se pudo guardar la decisión.', 'error');
+        dibujar();
       }
     });
 
@@ -246,7 +440,10 @@
       await Promise.all([cargarSalasDisponibles(), cargarReportes(selectorPeriodo.value), cargarLogs()]);
       (await obtenerTickets()).forEach(guardar);
       dibujar();
-    } catch (error) { bandeja.innerHTML = '<div class="empty">No se pudieron cargar los casos.</div>'; avisoTexto(error.message, 'error'); }
+    } catch (error) {
+      bandeja.innerHTML = '<div class="empty">No se pudieron cargar los casos.</div>';
+      avisoTexto(error.message, 'error');
+    }
   </script>
 </body>
 </html>
