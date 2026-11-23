@@ -136,6 +136,7 @@
     const aviso = document.querySelector('#aviso');
     const conexion = document.querySelector('#conexion');
     const tickets = new Map();
+    const seleccionesSalaFinal = new Map();
     const estadosVisibles = new Set(['pendiente_administracion', 'aprobado', 'rechazado']);
 
     let salasCache = [];
@@ -158,7 +159,8 @@
     }
 
     function tarjeta(t) {
-      const salaSugerida = t.sala_final_id ?? t.sala_preferida_id ?? t.sala_actual_id ?? '';
+      const guardada = seleccionesSalaFinal.get(String(t.id));
+      const salaSugerida = guardada ?? t.sala_final_id ?? t.sala_preferida_id ?? t.sala_actual_id ?? '';
       return `
         <article class="ticket" id="jef-${esc(t.id)}">
           <div class="ticket-top">
@@ -172,7 +174,7 @@
           ${t.estado === 'pendiente_administracion' ? `
             <div class="field" style="margin-top:10px;">
               <label for="sala-final-${esc(t.id)}">Elección final de sala</label>
-              <select id="sala-final-${esc(t.id)}">${opcionesSalas(salaSugerida)}</select>
+              <select id="sala-final-${esc(t.id)}" data-sala-select="${esc(t.id)}">${opcionesSalas(salaSugerida)}</select>
             </div>
             <div class="button-row">
               <button class="button" data-resolver="aprobado" data-id="${esc(t.id)}">Aprobar con sala elegida</button>
@@ -184,12 +186,22 @@
     }
 
     function dibujar() {
+      bandeja.querySelectorAll('[data-sala-select]').forEach(sel => {
+        seleccionesSalaFinal.set(String(sel.dataset.salaSelect), sel.value);
+      });
+
       bandeja.innerHTML = [...tickets.values()]
         .filter(t => estadosVisibles.has(t.estado))
         .sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion))
         .map(tarjeta)
         .join('') || '<div class="empty">No hay casos derivados.</div>';
     }
+
+    bandeja.addEventListener('change', e => {
+      const sel = e.target.closest('[data-sala-select]');
+      if (!sel) return;
+      seleccionesSalaFinal.set(String(sel.dataset.salaSelect), sel.value);
+    });
 
     function guardar(t) {
       if (estadosVisibles.has(t.estado)) tickets.set(String(t.id), t);
@@ -198,6 +210,7 @@
     }
 
     async function cargarProfesores() {
+      const profesorPrevio = selectReservaProfesor.value;
       try {
         const usuarios = await obtenerUsuarios();
         const lista = Array.isArray(usuarios) ? usuarios : [];
@@ -205,13 +218,21 @@
         const candidatos = docentes.length ? docentes : lista;
 
         selectReservaProfesor.innerHTML = '<option value="">-- Selecciona profesor --</option>' +
-          candidatos.map(u => `<option value="${esc(u.id)}" ${String(u.id) === String(sesion.id) ? 'selected' : ''}>${esc(u.nombre)} (${esc(u.rut || u.rol)})</option>`).join('');
+          candidatos.map(u => `<option value="${esc(u.id)}">${esc(u.nombre)} (${esc(u.rut || u.rol)})</option>`).join('');
+
+        if (profesorPrevio && [...selectReservaProfesor.options].some(o => o.value === profesorPrevio)) {
+          selectReservaProfesor.value = profesorPrevio;
+        }
       } catch (e) {
-        selectReservaProfesor.innerHTML = `<option value="${esc(sesion.id)}">${esc(sesion.nombre)}</option>`;
+        if (!selectReservaProfesor.options.length) {
+          selectReservaProfesor.innerHTML = `<option value="${esc(sesion.id)}">${esc(sesion.nombre)}</option>`;
+        }
       }
     }
 
     async function cargarCalendario() {
+      const salaPrevia = selectReservaSala.value;
+      const profesorPrevio = selectReservaProfesor.value;
       try {
         const data = await obtenerCalendarioSalas();
         fechasCalendario.textContent = `Hoy: ${esc(data.hoy)} · Mañana: ${esc(data.manana)}`;
@@ -223,6 +244,13 @@
           (disponiblesHoy.length ? disponiblesHoy : salas)
             .map(s => `<option value="${esc(s.id)}">Sala ${esc(s.numero_sala)} (${s.disponible_hoy ? 'Libre hoy' : 'Ocupada hoy'} · ${esc(s.sede || 'AIEP')})</option>`)
             .join('');
+
+        if (salaPrevia && [...selectReservaSala.options].some(o => o.value === salaPrevia)) {
+          selectReservaSala.value = salaPrevia;
+        }
+        if (profesorPrevio && [...selectReservaProfesor.options].some(o => o.value === profesorPrevio)) {
+          selectReservaProfesor.value = profesorPrevio;
+        }
 
         if (!salas.length) {
           contenedorCalendario.innerHTML = '<div class="empty">No hay salas registradas.</div>';
@@ -604,6 +632,7 @@
       const mensaje = window.prompt('Mensaje o resolución para el docente (opcional):') || '';
       try {
         await resolverTicketAdmin(idTicket, sesion.id, salaFinalId, mensaje, decision);
+        seleccionesSalaFinal.delete(String(idTicket));
         avisoTexto(`Ticket ${decision}.`, 'success');
         await Promise.all([cargarCalendario(), cargarLogs(), cargarReportes(selectorPeriodo.value)]);
       } catch (error) {
@@ -615,7 +644,7 @@
     try {
       escucharTiempoReal({
         alCrearTicket: guardar,
-        alActualizarTicket: async t => { guardar(t); await Promise.all([cargarLogs(), cargarCalendario()]); },
+        alActualizarTicket: async t => { guardar(t); await cargarLogs(); },
         alEstadoConexion: estado => {
           conexion.textContent = estado === 'SUBSCRIBED' ? 'En vivo' : `Tiempo real: ${estado}`;
           conexion.className = `connection ${estado === 'SUBSCRIBED' ? 'online' : ''}`;
