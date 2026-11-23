@@ -4,12 +4,6 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Administración | Tickets AIEP</title><link rel="stylesheet" href="./css/app.css">
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-  <style>
-    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-    .tab-btn { padding: 8px 14px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 6px; cursor: pointer; font-weight: 600; }
-    .tab-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
-    .tab-panel[hidden] { display: none; }
-  </style>
 </head>
 <body>
   <header class="topbar">
@@ -22,7 +16,7 @@
     <div class="heading">
       <div class="eyebrow">Panel Administrativo</div>
       <h1>Revisión de Administración</h1>
-      <p>Navega por pestañas para resolver tickets, reservar para mañana, exportar PDF con IA o revisar logs.</p>
+      <p>Navega por pestañas para resolver tickets, reservar para mañana, exportar PDF con gráficos e IA o revisar logs.</p>
     </div>
 
     <div id="aviso" class="notice" role="status" hidden></div>
@@ -62,7 +56,7 @@
         </div>
         <button class="button" type="submit">Reservar para el día siguiente</button>
       </form>
-      <div id="salas-disponibles" class="tickets"><div class="empty">Cargando salas…</div></div>
+      <div id="salas-disponibles" class="salas-grid"><div class="empty">Cargando salas…</div></div>
     </section>
 
     <!-- Pestaña 3: Reporte estadístico PDF + Resumen con IA -->
@@ -310,6 +304,18 @@
       const totalUsos = reportesCache.reduce((acc, r) => acc + Number(r.cantidad_usos || 0), 0);
       const totalHoras = reportesCache.reduce((acc, r) => acc + Number(r.horas_totales || 0), 0);
 
+      const usosPorSalaMap = new Map();
+      for (const r of reportesCache) {
+        const key = String(r.sala?.numero_sala || r.sala_id || 'N/A');
+        const actual = usosPorSalaMap.get(key) || { label: `Sala ${key}`, usos: 0, horas: 0 };
+        actual.usos += Number(r.cantidad_usos || 0);
+        actual.horas += Number(r.horas_totales || 0);
+        usosPorSalaMap.set(key, actual);
+      }
+      const topSalas = [...usosPorSalaMap.values()]
+        .sort((a, b) => b.usos - a.usos || b.horas - a.horas)
+        .slice(0, 6);
+
       const textoPlano = [
         `Periodo reporte: ${selectorPeriodo.value}`,
         `Salas totales: ${totalSalas} | Disponibles: ${salasLibres} | Ocupadas: ${salasOcupadas}`,
@@ -322,10 +328,66 @@
         periodo: selectorPeriodo.value,
         salas: { total: totalSalas, disponibles: salasLibres, ocupadas: salasOcupadas },
         tickets: { total: totalTickets, pendientes, aprobados, rechazados },
-        reportes: { cantidadRegistros: reportesCache.length, totalUsos, totalHoras: Number(totalHoras.toFixed(2)), items: reportesCache.slice(0, 20) },
+        reportes: { cantidadRegistros: reportesCache.length, totalUsos, totalHoras: Number(totalHoras.toFixed(2)), topSalas, items: reportesCache.slice(0, 20) },
         logsRecientes: logsCache.slice(0, 10),
         resumenTexto: textoPlano
       };
+    }
+
+    // Dibuja un gráfico de barras horizontales simple y limpio dentro del PDF
+    function dibujarGraficoBarrasPdf(doc, titulo, items, yInicial, colorRgb = [40, 87, 217]) {
+      const altoItem = 10;
+      const altoRequerido = 16 + items.length * altoItem;
+      let y = yInicial;
+
+      if (y + altoRequerido > 275) {
+        doc.addPage();
+        y = 20;
+      }
+
+      doc.setFontSize(11);
+      doc.setTextColor(20, 33, 61);
+      doc.text(titulo, 14, y);
+      y += 6;
+
+      if (!items.length) {
+        doc.setFontSize(9);
+        doc.setTextColor(102, 112, 133);
+        doc.text('Sin datos disponibles para graficar.', 14, y + 4);
+        return y + 12;
+      }
+
+      const maxVal = Math.max(...items.map(i => Number(i.valor || 0)), 1);
+      const xLabel = 14;
+      const anchoLabel = 42;
+      const xBarra = xLabel + anchoLabel;
+      const anchoMaxBarra = 110;
+
+      doc.setFontSize(8.5);
+      for (const item of items) {
+        const valor = Number(item.valor || 0);
+        const largoBarra = Math.max(2, (valor / maxVal) * anchoMaxBarra);
+
+        doc.setTextColor(23, 32, 51);
+        doc.text(String(item.etiqueta).slice(0, 22), xLabel, y + 5.5);
+
+        // Fondo suave de barra
+        doc.setFillColor(238, 242, 247);
+        doc.rect(xBarra, y + 1, anchoMaxBarra, 6, 'F');
+
+        // Barra activa
+        doc.setFillColor(colorRgb[0], colorRgb[1], colorRgb[2]);
+        doc.rect(xBarra, y + 1, largoBarra, 6, 'F');
+
+        // Valor al final
+        doc.setTextColor(56, 68, 90);
+        doc.text(`${item.textoValor ?? valor}`, xBarra + anchoMaxBarra + 4, y + 5.5);
+
+        y += altoItem;
+      }
+
+      doc.setTextColor(23, 32, 51);
+      return y + 6;
     }
 
     document.querySelector('#btn-generar-pdf').addEventListener('click', () => {
@@ -333,27 +395,129 @@
       const stats = construirDatosEstadisticos();
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF();
-      doc.setFontSize(16);
-      doc.text('Reporte Estadistico de Gestion de Salas - AIEP', 14, 18);
-      doc.setFontSize(10);
-      doc.text(`Generado: ${new Date().toLocaleString('es-CL')} | Periodo: ${stats.periodo}`, 14, 26);
-      doc.setFontSize(12);
-      doc.text('1. Indicadores Generales', 14, 38);
-      doc.setFontSize(10);
-      const lineas = doc.splitTextToSize(stats.resumenTexto, 180);
-      doc.text(lineas, 14, 45);
-      let y = 45 + lineas.length * 6 + 8;
-      doc.setFontSize(12);
-      doc.text(`2. Detalle de Reportes (${stats.periodo})`, 14, y);
-      y += 7;
-      doc.setFontSize(9);
-      for (const r of reportesCache.slice(0, 25)) {
-        if (y > 275) { doc.addPage(); y = 20; }
-        doc.text(`Sala ${r.sala?.numero_sala || r.sala_id} | Usuario: ${r.usuario?.nombre || `#${r.usuario_id}`} | Usos: ${r.cantidad_usos} | Horas: ${r.horas_totales}`, 14, y);
-        y += 6;
+
+      // Encabezado ordenado
+      doc.setFillColor(20, 33, 61);
+      doc.rect(0, 0, 210, 28, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(15);
+      doc.text('Reporte Estadistico de Gestion de Salas - AIEP', 14, 13);
+      doc.setFontSize(9.5);
+      doc.text(`Periodo: ${stats.periodo.toUpperCase()}   |   Generado: ${new Date().toLocaleString('es-CL')}`, 14, 21);
+
+      let y = 38;
+      doc.setTextColor(23, 32, 51);
+
+      // Bloque de KPIs en tabla de 2 filas
+      doc.setFontSize(11);
+      doc.text('Resumen de Indicadores', 14, y);
+      y += 5;
+
+      const kpis = [
+        ['Salas Totales', String(stats.salas.total), 'Disponibles', String(stats.salas.disponibles), 'Ocupadas', String(stats.salas.ocupadas)],
+        ['Usos Acumulados', String(stats.reportes.totalUsos), 'Horas Totales', `${stats.reportes.totalHoras} h`, 'Tickets Visibles', String(stats.tickets.total)]
+      ];
+
+      doc.setFontSize(8.5);
+      for (const fila of kpis) {
+        doc.setFillColor(244, 246, 250);
+        doc.rect(14, y, 182, 8, 'F');
+        doc.setDrawColor(228, 232, 240);
+        doc.rect(14, y, 182, 8, 'S');
+        let xCol = 16;
+        for (let i = 0; i < fila.length; i += 2) {
+          doc.setTextColor(102, 112, 133);
+          doc.text(`${fila[i]}:`, xCol, y + 5.2);
+          doc.setTextColor(20, 33, 61);
+          doc.text(fila[i + 1], xCol + 23, y + 5.2);
+          xCol += 60;
+        }
+        y += 8;
       }
+
+      y += 8;
+
+      // Gráfico 1: Estado de salas
+      y = dibujarGraficoBarrasPdf(
+        doc,
+        'Grafico 1 · Disponibilidad de Salas',
+        [
+          { etiqueta: 'Disponibles', valor: stats.salas.disponibles, textoValor: `${stats.salas.disponibles} salas` },
+          { etiqueta: 'Ocupadas', valor: stats.salas.ocupadas, textoValor: `${stats.salas.ocupadas} salas` }
+        ],
+        y,
+        [20, 125, 85]
+      );
+
+      // Gráfico 2: Tickets por estado
+      y = dibujarGraficoBarrasPdf(
+        doc,
+        'Grafico 2 · Tickets por Estado',
+        [
+          { etiqueta: 'Pendientes Admin', valor: stats.tickets.pendientes, textoValor: `${stats.tickets.pendientes}` },
+          { etiqueta: 'Aprobados', valor: stats.tickets.aprobados, textoValor: `${stats.tickets.aprobados}` },
+          { etiqueta: 'Rechazados', valor: stats.tickets.rechazados, textoValor: `${stats.tickets.rechazados}` }
+        ],
+        y,
+        [40, 87, 217]
+      );
+
+      // Gráfico 3: Top salas por usos en el periodo
+      y = dibujarGraficoBarrasPdf(
+        doc,
+        `Grafico 3 · Top Salas por Usos (${stats.periodo})`,
+        stats.reportes.topSalas.map(s => ({
+          etiqueta: s.label,
+          valor: s.usos,
+          textoValor: `${s.usos} usos (${s.horas.toFixed(1)}h)`
+        })),
+        y,
+        [154, 98, 0]
+      );
+
+      // Detalle ordenado en formato tabla
+      if (y > 240) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFontSize(11);
+      doc.setTextColor(20, 33, 61);
+      doc.text(`Detalle de Registros (${stats.periodo})`, 14, y);
+      y += 6;
+
+      doc.setFillColor(20, 33, 61);
+      doc.rect(14, y, 182, 7, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8.5);
+      doc.text('Sala', 16, y + 4.8);
+      doc.text('Usuario / Docente', 45, y + 4.8);
+      doc.text('Usos', 135, y + 4.8);
+      doc.text('Horas', 162, y + 4.8);
+      y += 7;
+
+      doc.setTextColor(23, 32, 51);
+      if (!reportesCache.length) {
+        doc.text('Sin filas en el reporte del periodo seleccionado.', 16, y + 5);
+      } else {
+        for (const r of reportesCache.slice(0, 25)) {
+          if (y > 278) {
+            doc.addPage();
+            y = 20;
+          }
+          const salaTxt = String(r.sala?.numero_sala || r.sala_id || '-');
+          const usrTxt = String(r.usuario?.nombre || `Usuario #${r.usuario_id || '-'}`).slice(0, 42);
+          doc.text(salaTxt, 16, y + 4.8);
+          doc.text(usrTxt, 45, y + 4.8);
+          doc.text(String(r.cantidad_usos ?? 0), 135, y + 4.8);
+          doc.text(`${Number(r.horas_totales ?? 0).toFixed(2)} h`, 162, y + 4.8);
+          doc.setDrawColor(238, 242, 247);
+          doc.line(14, y + 6.5, 196, y + 6.5);
+          y += 7;
+        }
+      }
+
       doc.save(`reporte-estadistico-salas-${stats.periodo}.pdf`);
-      avisoTexto('PDF estadístico generado y descargado.', 'success');
+      avisoTexto('PDF estadístico con gráficos de barras generado y descargado.', 'success');
     });
 
     async function pedirResumenIA(preguntaPersonalizada) {
